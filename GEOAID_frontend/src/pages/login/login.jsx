@@ -48,6 +48,34 @@ function LockIcon() {
   );
 }
 
+function ArrowLeftIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M19 12H5M11 6l-6 6 6 6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function Login() {
   const navigate = useNavigate();
   const rememberedUsername = localStorage.getItem("geoaid_remember") ?? "";
@@ -102,6 +130,13 @@ function Login() {
       >
         <div className="overlay"></div>
 
+        <div className="hero-back">
+          <button type="button" className="back-home-link" onClick={() => navigate("/")}>
+            <ArrowLeftIcon />
+            Back to home
+          </button>
+        </div>
+
         <div className="hero-content">
           <div className="brand-lockup">
             <img src={cityLogo} alt="City of Iligan Official Seal" className="city-seal" />
@@ -113,12 +148,23 @@ function Login() {
             </div>
           </div>
         </div>
+
+        <div className="hero-tagline">
+          <h3>Every second counts. GeoAid keeps every barangay ready.</h3>
+          <p>
+            Real-time evacuation routing, evacuee profiling, and priority-based
+            relief distribution — built for Iligan City's response teams.
+          </p>
+        </div>
       </div>
 
       <div className="login-panel">
         <div className="login-card">
+          <div className="login-card-icon">
+            <ShieldIcon />
+          </div>
           <h2>Welcome Back</h2>
-          <span>Sign in to continue to your account</span>
+          <span className="subtitle">Sign in to continue to your account</span>
 
           <form onSubmit={handleSubmit} noValidate>
             {error && (

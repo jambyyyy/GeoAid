@@ -29,13 +29,12 @@ body,
     min-width: 0;
     display: flex;
     flex-direction: column;
-    justify-content: flex-start;
+    justify-content: space-between;
     padding: 44px 56px;
     color: #fff;
 
     background-size: cover;
     background-repeat: no-repeat;
-    /* Change ONLY this value */
     background-position: 65% center;
 }
 
@@ -44,9 +43,9 @@ body,
     inset: 0;
     background: linear-gradient(
         120deg,
-        rgba(4, 12, 30, 0.82) 0%,
-        rgba(4, 12, 30, 0.55) 45%,
-        rgba(4, 12, 30, 0.25) 100%
+        rgba(4, 12, 30, 0.85) 0%,
+        rgba(4, 12, 30, 0.6) 45%,
+        rgba(4, 12, 30, 0.28) 100%
     );
     z-index: 1;
 }
@@ -54,6 +53,31 @@ body,
 .hero-content {
     position: relative;
     z-index: 2;
+}
+
+.hero-back {
+    position: relative;
+    z-index: 2;
+}
+
+.back-home-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.back-home-link:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
 }
 
 .brand-lockup {
@@ -86,7 +110,7 @@ body,
 }
 
 .brand-name .accent {
-    color: #60a5fa;
+    color: #4ade80;
 }
 
 .brand-subtitle {
@@ -95,6 +119,25 @@ body,
     letter-spacing: 1.6px;
     text-transform: uppercase;
     color: #cbd5e1;
+}
+
+.hero-tagline {
+    position: relative;
+    z-index: 2;
+    max-width: 460px;
+}
+
+.hero-tagline h3 {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.3;
+    margin-bottom: 10px;
+}
+
+.hero-tagline p {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #dce3ef;
 }
 
 /* ============ RIGHT: LOGIN PANEL ============ */
@@ -119,13 +162,25 @@ body,
     text-align: center;
 }
 
+.login-card-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 18px;
+    border-radius: 16px;
+    background: #f0fdf4;
+    color: #16a34a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .login-card h2 {
     color: #111;
     font-size: 26px;
     margin-bottom: 8px;
 }
 
-.login-card span {
+.login-card span.subtitle {
     display: block;
     color: #666;
     margin-bottom: 28px;
@@ -313,8 +368,13 @@ body,
     }
 
     .login-hero {
-        padding: 36px 28px;
-        min-height: 60vh;
+        padding: 28px 24px;
+        min-height: unset;
+        gap: 24px;
+    }
+
+    .hero-tagline {
+        display: none;
     }
 
     .brand-name {
@@ -324,5 +384,9 @@ body,
     .login-panel {
         min-width: 0;
         padding: 32px 20px 48px;
+    }
+
+    .login-card {
+        padding: 36px 26px;
     }
 }
