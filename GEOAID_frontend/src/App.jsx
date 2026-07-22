@@ -1,16 +1,37 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
 import Landing from "./pages/landing/landing";
 import Login from "./pages/login/login";
+
 import Dashboard from "./pages/dashboard/dashboard";
+import CSWDDashboard from "./pages/dashboard/CSWDDashboard";
+
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public Pages */}
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+
+        {/* Barangay Staff */}
+        <Route
+          path="/dashboard"
+          element={<Dashboard />}
+        />
+
+        {/* CSWD */}
+        <Route
+          path="/cswd-dashboard"
+          element={<CSWDDashboard />}
+        />
+
+        {/* Unknown Routes */}
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
       </Routes>
     </BrowserRouter>
   );

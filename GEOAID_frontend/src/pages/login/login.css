@@ -237,6 +237,48 @@ body,
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
 }
 
+.login-card select.role-select {
+    width: 100%;
+    padding: 14px 40px 14px 44px;
+    border-radius: 10px;
+    border: 1px solid #d1d5db;
+    background: #f8fafc;
+    color: #111;
+    outline: none;
+    font-size: 14px;
+    line-height: 1.2;
+    transition: 0.3s;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    cursor: pointer;
+}
+
+.login-card select.role-select:invalid,
+.login-card select.role-select option[value=""] {
+    color: #888;
+}
+
+.login-card select.role-select:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.login-card select.role-select:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    background: #eef1f5;
+}
+
+.select-chevron {
+    position: absolute;
+    right: 14px;
+    width: 16px;
+    height: 16px;
+    color: #9ca3af;
+    pointer-events: none;
+}
+
 .toggle-visibility {
     position: absolute;
     right: 14px;

@@ -54,6 +54,49 @@ function ArrowLeftIcon() {
   );
 }
 
+function RoleIcon() {
+  return (
+    <svg className="input-icon" viewBox="0 0 24 24" fill="none">
+      <rect
+        x="3"
+        y="5"
+        width="18"
+        height="14"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+      <circle cx="9" cy="10.5" r="1.75" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M6.5 15c.6-1.4 1.8-2 2.5-2s1.9.6 2.5 2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M14 9h4M14 12h4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg className="select-chevron" viewBox="0 0 24 24" fill="none">
+      <path
+        d="M6 9l6 6 6-6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ShieldIcon() {
   return (
     <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
@@ -72,6 +115,7 @@ function Login() {
   const rememberedUsername =
     localStorage.getItem("geoaid_remember") ?? "";
 
+  const [role, setRole] = useState("");
   const [username, setUsername] = useState(rememberedUsername);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -85,6 +129,11 @@ function Login() {
     event.preventDefault();
 
     setError("");
+
+    if (!role) {
+      setError("Please select a role.");
+      return;
+    }
 
     const trimmedUsername = username.trim();
 
@@ -111,6 +160,7 @@ function Login() {
           body: JSON.stringify({
             username: trimmedUsername,
             password: password,
+            role: role,
           }),
         }
       );
@@ -118,7 +168,9 @@ function Login() {
       const data = await response.json();
 
       if (!response.ok) {
-        setError(data.message || "Invalid username or password.");
+        setError(
+          data.message || "Invalid username or password."
+        );
         return;
       }
 
@@ -131,12 +183,35 @@ function Login() {
         localStorage.removeItem("geoaid_remember");
       }
 
+      // Use the role the SERVER determined from the account's actual
+      // group, not the value the user picked in the dropdown. The
+      // dropdown is only used to ask the server "is this account
+      // supposed to log in as X?" — the response is authoritative.
+      const confirmedRole = data.role;
+
       sessionStorage.setItem(
         "geoaid_user",
         data.username
       );
 
-      navigate("/dashboard");
+      sessionStorage.setItem(
+        "geoaid_role",
+        confirmedRole
+      );
+
+      // Redirect according to the confirmed role
+      if (confirmedRole === "barangay") {
+        navigate("/dashboard");
+      } else if (confirmedRole === "cswd") {
+        navigate("/cswd-dashboard");
+      } else if (confirmedRole === "drrm") {
+        navigate("/drrm-dashboard");
+      } else if (confirmedRole === "purok") {
+        navigate("/purok-dashboard");
+      } else {
+        setError("Your account isn't assigned to a recognized role. Please contact an administrator.");
+      }
+
     } catch (err) {
       console.error(err);
       setError("Unable to connect to the server.");
@@ -183,23 +258,11 @@ function Login() {
             </div>
           </div>
         </div>
-
-        <div className="hero-tagline">
-          <h3>
-            Every second counts. GeoAid keeps every barangay
-            ready.
-          </h3>
-
-          <p>
-            Real-time evacuation routing, evacuee profiling,
-            and priority-based relief distribution — built
-            for Iligan City's response teams.
-          </p>
-        </div>
       </div>
 
       <div className="login-panel">
         <div className="login-card">
+
           <div className="login-card-icon">
             <ShieldIcon />
           </div>
@@ -211,13 +274,55 @@ function Login() {
           </span>
 
           <form onSubmit={handleSubmit}>
+
             {error && (
               <div className="form-error">
                 {error}
               </div>
             )}
 
-            <label htmlFor="username">Username</label>
+            {/* ROLE */}
+            <label htmlFor="role">Role</label>
+
+            <div className="input-wrap">
+              <RoleIcon />
+
+              <select
+                id="role"
+                className="role-select"
+                value={role}
+                onChange={(e) =>
+                  setRole(e.target.value)
+                }
+                disabled={isSubmitting}
+              >
+                <option value="">
+                  Select Role
+                </option>
+
+                <option value="barangay">
+                  Barangay Staff
+                </option>
+
+                <option value="cswd">
+                  CSWD
+                </option>
+
+                <option value="drrm">
+                  DRRM Officer
+                </option>
+
+                <option value="purok">
+                  Purok President
+                </option>
+              </select>
+
+              <ChevronDownIcon />
+            </div>
+
+            <label htmlFor="username">
+              Username
+            </label>
 
             <div className="input-wrap">
               <UserIcon />
@@ -230,11 +335,12 @@ function Login() {
                 onChange={(e) =>
                   setUsername(e.target.value)
                 }
-                disabled={isSubmitting}
               />
             </div>
 
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">
+              Password
+            </label>
 
             <div className="input-wrap">
               <LockIcon />
@@ -242,24 +348,29 @@ function Login() {
               <input
                 id="password"
                 type={
-                  showPassword ? "text" : "password"
+                  showPassword
+                    ? "text"
+                    : "password"
                 }
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) =>
                   setPassword(e.target.value)
                 }
-                disabled={isSubmitting}
               />
 
               <button
                 type="button"
                 className="toggle-visibility"
                 onClick={() =>
-                  setShowPassword(!showPassword)
+                  setShowPassword(
+                    !showPassword
+                  )
                 }
               >
-                {showPassword ? "Hide" : "Show"}
+                {showPassword
+                  ? "Hide"
+                  : "Show"}
               </button>
             </div>
 
@@ -269,7 +380,9 @@ function Login() {
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) =>
-                    setRememberMe(e.target.checked)
+                    setRememberMe(
+                      e.target.checked
+                    )
                   }
                 />
                 <span>Remember me</span>
@@ -286,18 +399,6 @@ function Login() {
                 : "Login"}
             </button>
 
-            <div className="footer-divider"></div>
-
-            <p className="footer">
-              Authorized Personnel Only
-            </p>
-
-            <div className="info-box">
-              <p>
-                This system is for authorized users only.
-                All activities are monitored and recorded.
-              </p>
-            </div>
           </form>
         </div>
       </div>
