@@ -48,3 +48,14 @@
     flex-direction: column;
     margin-top: 22px;
 }
+
+.register-submit-error {
+    margin-bottom: 14px;
+    padding: 11px 13px;
+    border-radius: 10px;
+    background: var(--accent-danger-soft);
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+    font-size: 13px;
+    line-height: 1.4;
+}
