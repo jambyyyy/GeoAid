@@ -4,6 +4,8 @@ from .views import (
     cswd_dashboard,
     purok_dashboard,
     register_resident,
+    register_complete,
+    register_lookups,
     login_resident,
     resident_dashboard,
 )
@@ -15,6 +17,8 @@ urlpatterns = [
 
     # Resident app (GEOAID_resident)
     path("resident/register/", register_resident),
+    path("resident/register/lookups/", register_lookups),
+    path("resident/register/complete/", register_complete),
     path("resident/login/", login_resident),
     path("resident/dashboard/", resident_dashboard),
 ]

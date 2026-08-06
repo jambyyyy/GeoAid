@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json
 
-from .models import Household
+from .models import Household, FamilyMember
 
 
 def _cors_preflight():
@@ -387,27 +387,157 @@ def login_resident(request):
 
 
 @csrf_exempt
+def register_complete(request):
+    """Steps 2-4 of registration (Household / Members / Vulnerability),
+    submitted together by Register.jsx's handleFinish once all four
+    steps are filled in. Looks the household up by mobile_number (set
+    in Step 1 via register_resident) and fills in address/dwelling/4Ps
+    fields, then (re)creates its FamilyMember rows."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        mobile_number = (data.get("mobile_number") or "").strip()
+        if not mobile_number:
+            return JsonResponse({
+                "success": False,
+                "message": "mobile_number is required."
+            }, status=400)
+
+        try:
+            household = Household.objects.get(mobile_number=mobile_number)
+        except Household.DoesNotExist:
+            return JsonResponse({
+                "success": False,
+                "message": "No account found for this mobile number. Complete Step 1 first."
+            }, status=404)
+
+        members_payload = data.get("members") or []
+        if not members_payload:
+            return JsonResponse({
+                "success": False,
+                "message": "At least one household member is required."
+            }, status=400)
+
+        for m in members_payload:
+            if not (m.get("full_name") or "").strip():
+                return JsonResponse({
+                    "success": False,
+                    "message": "Every member needs a full name."
+                }, status=400)
+            try:
+                int(m.get("age"))
+            except (TypeError, ValueError):
+                return JsonResponse({
+                    "success": False,
+                    "message": f"Invalid age for {m.get('full_name', 'a member')}."
+                }, status=400)
+
+        household.barangay = data.get("barangay") or ""
+        household.purok = data.get("purok") or ""
+        household.address_line = data.get("address_line") or ""
+        household.landmark = data.get("landmark") or ""
+        household.dwelling_type = data.get("dwelling_type") or ""
+        household.gps_lat = data.get("gps_lat")
+        household.gps_lng = data.get("gps_lng")
+        household.is_four_ps = bool(data.get("is_four_ps"))
+        household.registration_complete = True
+        household.save()
+
+        # Steps 3-4 are re-submitted together as one array each time,
+        # so replace any previously-saved members rather than appending.
+        household.family_members.all().delete()
+
+        created = []
+        for m in members_payload:
+            created.append(FamilyMember.objects.create(
+                household=household,
+                full_name=m.get("full_name").strip(),
+                age=int(m.get("age")),
+                relation=m.get("relation") or "Other",
+                is_pwd=bool(m.get("is_pwd")),
+                pwd_detail=(m.get("pwd_detail") or "").strip(),
+                is_pregnant=bool(m.get("is_pregnant")),
+                pregnant_detail=(m.get("pregnant_detail") or "").strip(),
+            ))
+
+        return JsonResponse({
+            "success": True,
+            "household_code": household.household_code,
+            "member_count": len(created),
+        }, status=201)
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)
+
+
+def register_lookups(request):
+    """Barangay + dwelling type options for HouseholdStep.jsx's
+    dropdowns, sourced from the model's choices so there's one place
+    to update them instead of duplicating the lists in the frontend."""
+
+    return JsonResponse({
+        "barangays": [value for value, _label in Household.BARANGAY_CHOICES],
+        "dwelling_types": [
+            {"value": value, "label": label}
+            for value, label in Household.DWELLING_TYPE_CHOICES
+        ],
+    })
+
+
+@csrf_exempt
 def resident_dashboard(request):
 
     if request.method == "OPTIONS":
         return _cors_preflight()
 
     mobile_number = request.GET.get("mobile_number", "")
-    household = Household.objects.filter(mobile_number=mobile_number).first()
 
-    # Only the greeting is backed by a real record so far. The advisory,
-    # evacuation center, and members list are still the same demo data
-    # PurokDashboard/CSWDDashboard use — replace with real queries once
-    # HouseholdMember / EvacuationCenter models exist.
-    household_name = f"{household.full_name.split(' ')[-1]} Household" if household else "Santos Household"
+    try:
+        household = Household.objects.get(mobile_number=mobile_number)
+    except Household.DoesNotExist:
+        return JsonResponse({
+            "success": False,
+            "message": "Household not found."
+        }, status=404)
+
+    members = []
+    for member in household.family_members.all():
+        flags = []
+        if member.is_pwd:
+            flags.append("PWD")
+        if member.is_pregnant:
+            flags.append("Pregnant")
+        if member.is_elderly:
+            flags.append("Elderly")
+        if member.is_child_under5:
+            flags.append("Child<5")
+        if household.is_four_ps:
+            flags.append("4Ps")
+
+        members.append({
+            "name": member.full_name,
+            "role": "Head of Household" if member.relation == "Head" else member.relation,
+            "flags": flags,
+        })
+
+    household_name = f"{household.full_name.split(' ')[-1]} Household" if household.full_name else "Household"
 
     data = {
         "household_name": household_name,
         "unread_alerts": 2,
+        # TODO: replace with a real Advisory/Disaster model + geo lookup.
         "advisory": {
             "title": "Flood Advisory — Tibanga",
             "body": "PAGASA: Heavy rainfall expected. Prepare go-bag. Issued 7:45 AM",
         },
+        # TODO: replace with a real EvacuationCenter model + geo lookup.
         "nearest_center": {
             "name": "Tibanga Gymnasium",
             "distance_km": 0.8,
@@ -416,11 +546,7 @@ def resident_dashboard(request):
             "occupancy": 87,
             "capacity": 300,
         },
-        "members": [
-            {"name": household.full_name if household else "Maria Santos", "role": "Head of Household", "flag": "4Ps"},
-            {"name": "Juan Santos", "role": "Spouse · PWD", "flag": "PWD"},
-            {"name": "Liza Santos", "role": "Child · Age 16", "flag": None},
-        ],
+        "members": members,
     }
 
     return JsonResponse(data)

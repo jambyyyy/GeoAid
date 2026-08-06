@@ -6,16 +6,51 @@ import random
 
 class Household(models.Model):
     """A resident account created through the GeoAid Resident app's
-    registration flow (Account Setup step). This is intentionally
-    separate from the staff `User`/Group accounts used in login_user —
-    residents sign in with a mobile number + password, not a username,
-    and don't need Django's admin/permissions machinery."""
+    registration flow (Steps 1-4: Account, Household, Members,
+    Vulnerability). This is intentionally separate from the staff
+    `User`/Group accounts used in login_user — residents sign in with
+    a mobile number + password, not a username, and don't need
+    Django's admin/permissions machinery."""
 
+    BARANGAY_CHOICES = [
+        ("Mahayahay", "Mahayahay"),
+        ("Tambacan", "Tambacan"),
+        ("Abuno", "Abuno"),
+        ("Hinaplanon", "Hinaplanon"),
+        ("Pala-o Riverside", "Pala-o Riverside"),
+        ("Tubod", "Tubod"),
+        ("Tipanoy", "Tipanoy"),
+        ("Other", "Other"),
+    ]
+
+    DWELLING_TYPE_CHOICES = [
+        ("concrete", "Concrete"),
+        ("semi_concrete", "Semi-concrete"),
+        ("wood", "Wood / Light materials"),
+        ("makeshift", "Makeshift / Informal settler structure"),
+    ]
+
+    # --- Step 1: Account Setup ---
     household_code = models.CharField(max_length=24, unique=True, editable=False)
     full_name = models.CharField(max_length=150)
     mobile_number = models.CharField(max_length=20, unique=True)
     password_hash = models.CharField(max_length=255)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # --- Step 2: Household Setup ---
+    barangay = models.CharField(max_length=50, choices=BARANGAY_CHOICES, blank=True)
+    purok = models.CharField(max_length=100, blank=True)
+    address_line = models.CharField(max_length=255, blank=True)
+    landmark = models.CharField(max_length=255, blank=True)
+    dwelling_type = models.CharField(max_length=20, choices=DWELLING_TYPE_CHOICES, blank=True)
+    gps_lat = models.FloatField(null=True, blank=True)
+    gps_lng = models.FloatField(null=True, blank=True)
+
+    # --- Step 4: Vulnerability Assessment (household-level) ---
+    is_four_ps = models.BooleanField(default=False)
+
+    # Set once Steps 2-4 have all been submitted via register/complete/
+    registration_complete = models.BooleanField(default=False)
 
     def set_password(self, raw_password):
         self.password_hash = make_password(raw_password)
@@ -38,3 +73,48 @@ class Household(models.Model):
 
     def __str__(self):
         return f"{self.full_name} ({self.mobile_number})"
+
+
+class FamilyMember(models.Model):
+    """A member of a Household, captured in Step 3 (Household Members)
+    and flagged in Step 4 (Vulnerability Assessment). One household can
+    have many family members."""
+
+    RELATION_CHOICES = [
+        ("Head", "Head of Household"),
+        ("Spouse", "Spouse"),
+        ("Child", "Child"),
+        ("Parent", "Parent"),
+        ("Sibling", "Sibling"),
+        ("Grandchild", "Grandchild"),
+        ("Other", "Other"),
+    ]
+
+    household = models.ForeignKey(
+        Household,
+        on_delete=models.CASCADE,
+        related_name="family_members",
+    )
+    full_name = models.CharField(max_length=150)
+    age = models.PositiveIntegerField()
+    relation = models.CharField(max_length=20, choices=RELATION_CHOICES, default="Other")
+
+    # Vulnerability flags (Step 4)
+    is_pwd = models.BooleanField(default=False)
+    pwd_detail = models.CharField(max_length=255, blank=True)
+    is_pregnant = models.BooleanField(default=False)
+    pregnant_detail = models.CharField(max_length=255, blank=True)
+
+    # Used for evacuation-center QR check-in/out (Home screen "My QR Code")
+    qr_code = models.CharField(max_length=255, unique=True, blank=True, null=True)
+
+    @property
+    def is_elderly(self):
+        return self.age >= 60
+
+    @property
+    def is_child_under5(self):
+        return self.age < 5
+
+    def __str__(self):
+        return f"{self.full_name} ({self.relation} of {self.household.full_name})"
