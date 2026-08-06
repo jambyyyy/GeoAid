@@ -3,6 +3,16 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json
 
+from .models import Household
+
+
+def _cors_preflight():
+    response = JsonResponse({})
+    response["Access-Control-Allow-Origin"] = "*"
+    response["Access-Control-Allow-Headers"] = "Content-Type"
+    response["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    return response
+
 
 # Maps a user's Django group name (lowercased) to the role code the
 # frontend uses ("barangay", "cswd", "drrm", "purok"). Add/adjust
@@ -276,6 +286,140 @@ def purok_dashboard(request):
                     {"name": "Fe Rosales", "relation": "Spouse", "age": 49},
                 ],
             },
+        ],
+    }
+
+    return JsonResponse(data)
+
+# ─────────────────────────────────────────────────────────────
+# Resident app (GEOAID_resident) — households sign in with a mobile
+# number + password rather than a staff username/group, so these
+# don't go through authenticate()/GROUP_ROLE_MAP like login_user.
+# ─────────────────────────────────────────────────────────────
+
+@csrf_exempt
+def register_resident(request):
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        full_name = (data.get("full_name") or "").strip()
+        mobile_number = (data.get("mobile_number") or "").strip()
+        password = data.get("password") or ""
+
+        if not full_name or not mobile_number or not password:
+            return JsonResponse({
+                "success": False,
+                "message": "Full name, mobile number, and password are required."
+            }, status=400)
+
+        if len(password) < 8:
+            return JsonResponse({
+                "success": False,
+                "message": "Password must be at least 8 characters."
+            }, status=400)
+
+        if Household.objects.filter(mobile_number=mobile_number).exists():
+            return JsonResponse({
+                "success": False,
+                "message": "An account with this mobile number already exists."
+            }, status=409)
+
+        household = Household(full_name=full_name, mobile_number=mobile_number)
+        household.set_password(password)
+        household.save()
+
+        return JsonResponse({
+            "success": True,
+            "household_code": household.household_code,
+            "full_name": household.full_name,
+            "mobile_number": household.mobile_number,
+        }, status=201)
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)
+
+
+@csrf_exempt
+def login_resident(request):
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        mobile_number = (data.get("mobile_number") or "").strip()
+        password = data.get("password") or ""
+
+        try:
+            household = Household.objects.get(mobile_number=mobile_number)
+        except Household.DoesNotExist:
+            return JsonResponse({
+                "success": False,
+                "message": "Invalid mobile number or password."
+            }, status=401)
+
+        if not household.check_password(password):
+            return JsonResponse({
+                "success": False,
+                "message": "Invalid mobile number or password."
+            }, status=401)
+
+        return JsonResponse({
+            "success": True,
+            "household_code": household.household_code,
+            "full_name": household.full_name,
+            "mobile_number": household.mobile_number,
+        })
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)
+
+
+@csrf_exempt
+def resident_dashboard(request):
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    mobile_number = request.GET.get("mobile_number", "")
+    household = Household.objects.filter(mobile_number=mobile_number).first()
+
+    # Only the greeting is backed by a real record so far. The advisory,
+    # evacuation center, and members list are still the same demo data
+    # PurokDashboard/CSWDDashboard use — replace with real queries once
+    # HouseholdMember / EvacuationCenter models exist.
+    household_name = f"{household.full_name.split(' ')[-1]} Household" if household else "Santos Household"
+
+    data = {
+        "household_name": household_name,
+        "unread_alerts": 2,
+        "advisory": {
+            "title": "Flood Advisory — Tibanga",
+            "body": "PAGASA: Heavy rainfall expected. Prepare go-bag. Issued 7:45 AM",
+        },
+        "nearest_center": {
+            "name": "Tibanga Gymnasium",
+            "distance_km": 0.8,
+            "walk_minutes": 10,
+            "status": "open",
+            "occupancy": 87,
+            "capacity": 300,
+        },
+        "members": [
+            {"name": household.full_name if household else "Maria Santos", "role": "Head of Household", "flag": "4Ps"},
+            {"name": "Juan Santos", "role": "Spouse · PWD", "flag": "PWD"},
+            {"name": "Liza Santos", "role": "Child · Age 16", "flag": None},
         ],
     }
 

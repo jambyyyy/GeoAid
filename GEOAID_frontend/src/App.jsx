@@ -7,7 +7,6 @@ import Dashboard from "./pages/dashboard/dashboard";
 import CSWDDashboard from "./pages/dashboard/CSWDDashboard";
 import PurokDashboard from "./pages/dashboard/PurokDashboard";
 
-
 function App() {
   return (
     <BrowserRouter>
@@ -17,28 +16,16 @@ function App() {
         <Route path="/login" element={<Login />} />
 
         {/* Barangay Staff */}
-        <Route
-          path="/dashboard"
-          element={<Dashboard />}
-        />
+        <Route path="/dashboard" element={<Dashboard />} />
 
         {/* CSWD */}
-        <Route
-          path="/cswd-dashboard"
-          element={<CSWDDashboard />}
-        />
+        <Route path="/cswd-dashboard" element={<CSWDDashboard />} />
 
         {/* Purok President */}
-        <Route
-          path="/purok-dashboard"
-          element={<PurokDashboard />}
-        />
+        <Route path="/purok-dashboard" element={<PurokDashboard />} />
 
         {/* Unknown Routes */}
-        <Route
-          path="*"
-          element={<Navigate to="/" replace />}
-        />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );
