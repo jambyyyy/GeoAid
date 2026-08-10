@@ -84,8 +84,16 @@ function Register() {
         return;
       }
 
-      sessionStorage.setItem("geoaid_resident_mobile", account?.mobile_number || "");
-      navigate("/home");
+      // Registration is submitted but not yet reviewed by the Purok
+      // President — don't sign the resident in yet. Send them to login
+      // with a message; login_resident will keep rejecting them with a
+      // "pending" status until a Purok President approves the household.
+      navigate("/login", {
+        state: {
+          message:
+            "Registration submitted! Your household is now pending review by your Purok President. You'll be able to log in once it's approved.",
+        },
+      });
     } catch (err) {
       console.error(err);
       setSubmitError("Unable to connect to the server. Make sure the Django backend is running.");

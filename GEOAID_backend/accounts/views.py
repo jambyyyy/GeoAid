@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -27,6 +28,34 @@ GROUP_ROLE_MAP = {
     "purok president": "purok",
     "purok": "purok",
 }
+
+
+def _match_barangay(value):
+    """Match free text against Household.BARANGAY_CHOICES, case-insensitively.
+    Returns the canonical choice value (e.g. 'Abuno'), or '' if no match."""
+
+    value = (value or "").strip().lower()
+    for choice_value, _label in Household.BARANGAY_CHOICES:
+        if choice_value.lower() == value:
+            return choice_value
+    return ""
+
+
+def _barangay_for_username(username):
+    """Looks up a staff username's Django user and matches their First
+    Name (Django admin > Users) against Household.BARANGAY_CHOICES.
+    This is how a Purok President's dashboard gets scoped to their own
+    barangay — using only the username the frontend already has in
+    sessionStorage, so no extra login-page wiring is needed."""
+
+    username = (username or "").strip()
+    if not username:
+        return ""
+    try:
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return ""
+    return _match_barangay(user.first_name)
 
 
 @csrf_exempt
@@ -83,11 +112,24 @@ def login_user(request):
                     "message": "This account is not registered under the selected role."
                 }, status=403)
 
-            return JsonResponse({
+            barangay_assignment = ""
+            if actual_role == "purok":
+                # Best-effort only for now — barangay is stored on the
+                # user's First Name field (Django admin > Users), but a
+                # Purok President can still log in even if it's not set
+                # yet. Dashboard filtering by barangay is not enforced
+                # until the frontend is wired up to send it.
+                barangay_assignment = _match_barangay(user.first_name)
+
+            response_payload = {
                 "success": True,
                 "username": user.username,
-                "role": actual_role
-            })
+                "role": actual_role,
+            }
+            if actual_role == "purok":
+                response_payload["barangay"] = barangay_assignment
+
+            return JsonResponse(response_payload)
 
         return JsonResponse({
             "success": False,
@@ -152,144 +194,168 @@ def cswd_dashboard(request):
 
 @csrf_exempt
 def purok_dashboard(request):
+    """Real household registrations for the Purok President to review.
+    Previously returned hardcoded demo families — now pulls from the
+    Household/FamilyMember records created via register_resident +
+    register_complete.
+
+    TODO: once Purok Presidents are scoped to a specific purok (not just
+    barangay) via a staff-user -> purok mapping, filter households_qs by
+    that purok too instead of only the optional ?purok= query param below.
+    Same for flood_advisory, which needs a real Advisory/Disaster model.
+    """
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    purok_filter = (request.GET.get("purok") or "").strip()
+    username_param = (request.GET.get("username") or "").strip()
+    # Kept as a manual override/fallback for testing, but the normal path
+    # is deriving barangay from the logged-in username below.
+    barangay_override = (request.GET.get("barangay") or "").strip()
+
+    valid_barangay = _barangay_for_username(username_param) or _match_barangay(barangay_override)
+
+    if not valid_barangay:
+        return JsonResponse({
+            "purok": purok_filter or "All Puroks",
+            "barangay": "",
+            "flood_advisory": False,
+            "total_households": 0,
+            "unregistered_households": 0,
+            "households": [],
+            "message": (
+                "Couldn't determine this account's barangay. "
+                "Set its First Name in Django admin > Users to its barangay (e.g. 'Tubod')."
+            ),
+        })
+
+    households_qs = (
+        Household.objects
+        .filter(registration_complete=True)
+        .prefetch_related("family_members")
+        .order_by("-created_at")
+    )
+    households_qs = households_qs.filter(barangay__iexact=valid_barangay)
+    if purok_filter:
+        households_qs = households_qs.filter(purok__iexact=purok_filter)
+
+    households = []
+    for h in households_qs:
+        flags = set()
+        member_payload = []
+
+        for m in h.family_members.all():
+            tag = None
+            if m.is_pwd:
+                flags.add("PWD")
+                tag = f"PWD - {m.pwd_detail}" if m.pwd_detail else "PWD"
+            if m.is_pregnant:
+                flags.add("Pregnant")
+                tag = f"Pregnant - {m.pregnant_detail}" if m.pregnant_detail else "Pregnant"
+            if m.is_elderly:
+                flags.add("Elderly")
+            if m.is_child_under5:
+                flags.add("Child<5")
+
+            member_payload.append({
+                "name": m.full_name,
+                "relation": m.relation,
+                "age": m.age,
+                "tag": tag,
+            })
+
+        if h.is_four_ps:
+            flags.add("4Ps")
+
+        households.append({
+            "id": h.household_code,
+            "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
+            "flags": sorted(flags),
+            "address": h.address_line or "Address not provided",
+            "purok": h.purok or "—",
+            "barangay": h.barangay or "—",
+            "gps_lat": h.gps_lat,
+            "gps_lng": h.gps_lng,
+            "submitted": h.created_at.strftime("%b %d, %Y · %I:%M %p"),
+            "status": h.status,
+            "members": member_payload,
+        })
 
     data = {
-        "purok": "Purok 3",
-        "barangay": "Tibanga, Iligan City",
-        "flood_advisory": True,
-        "total_households": 147,
-        "unregistered_households": 12,
-
-        # Household registrations submitted by residents of this Purok,
-        # awaiting Purok President verification before being forwarded
-        # to Barangay Staff for final confirmation.
-        "households": [
-            {
-                "id": "GAID-2025-08-1053",
-                "family_name": "Bautista",
-                "flags": ["PWD", "4Ps"],
-                "address": "12 Mabuhay St., Tibanga",
-                "gps_lat": 8.2281,
-                "gps_lng": 124.2441,
-                "submitted": "Jul 21, 2025 · 8:14 AM",
-                "status": "pending",
-                "members": [
-                    {"name": "Elena Bautista", "relation": "Head", "age": 38},
-                    {"name": "Ramon Bautista", "relation": "Spouse", "age": 42, "tag": "PWD - mobility impairment"},
-                    {"name": "Kyla Bautista", "relation": "Child", "age": 14},
-                    {"name": "Lito Bautista", "relation": "Child", "age": 10},
-                    {"name": "Nena Cruz", "relation": "Parent", "age": 68},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1054",
-                "family_name": "Fernandez",
-                "flags": ["Pregnant"],
-                "address": "7 Maliksi Ave., Tibanga",
-                "gps_lat": 8.2274,
-                "gps_lng": 124.2453,
-                "submitted": "Jul 21, 2025 · 8:52 AM",
-                "status": "pending",
-                "members": [
-                    {"name": "Jose Fernandez", "relation": "Head", "age": 31},
-                    {"name": "Marites Fernandez", "relation": "Spouse", "age": 29, "tag": "Pregnant - 7 months"},
-                    {"name": "Miko Fernandez", "relation": "Child", "age": 3},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1055",
-                "family_name": "Ocampo",
-                "flags": ["Elderly", "4Ps", "Child<5"],
-                "address": "34 Rizal St., Tibanga",
-                "gps_lat": 8.2290,
-                "gps_lng": 124.2438,
-                "submitted": "Jul 20, 2025 · 6:03 PM",
-                "status": "pending",
-                "members": [
-                    {"name": "Vicente Ocampo", "relation": "Head", "age": 71, "tag": "Elderly"},
-                    {"name": "Rosa Ocampo", "relation": "Spouse", "age": 67, "tag": "Elderly"},
-                    {"name": "Anna Ocampo", "relation": "Daughter", "age": 33},
-                    {"name": "Mark Ocampo", "relation": "Son-in-law", "age": 35},
-                    {"name": "Zoe Ocampo", "relation": "Grandchild", "age": 4, "tag": "Child < 5"},
-                    {"name": "Ben Ocampo", "relation": "Grandchild", "age": 2, "tag": "Child < 5"},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1041",
-                "family_name": "Reyes",
-                "flags": ["4Ps"],
-                "address": "9 Bonifacio St., Tibanga",
-                "gps_lat": 8.2266,
-                "gps_lng": 124.2447,
-                "submitted": "Jul 19, 2025 · 9:10 AM",
-                "status": "approved",
-                "members": [
-                    {"name": "Carlo Reyes", "relation": "Head", "age": 40},
-                    {"name": "Divina Reyes", "relation": "Spouse", "age": 37},
-                    {"name": "Pia Reyes", "relation": "Child", "age": 9},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1042",
-                "family_name": "Torres",
-                "flags": [],
-                "address": "21 Aguinaldo St., Tibanga",
-                "gps_lat": 8.2258,
-                "gps_lng": 124.2429,
-                "submitted": "Jul 18, 2025 · 3:47 PM",
-                "status": "approved",
-                "members": [
-                    {"name": "Samuel Torres", "relation": "Head", "age": 29},
-                    {"name": "Iris Torres", "relation": "Spouse", "age": 27},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1043",
-                "family_name": "Santos",
-                "flags": ["Elderly"],
-                "address": "5 Luna St., Tibanga",
-                "gps_lat": 8.2295,
-                "gps_lng": 124.2460,
-                "submitted": "Jul 18, 2025 · 10:02 AM",
-                "status": "approved",
-                "members": [
-                    {"name": "Perla Santos", "relation": "Head", "age": 74, "tag": "Elderly"},
-                    {"name": "Noel Santos", "relation": "Son", "age": 41},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1044",
-                "family_name": "Villa",
-                "flags": ["4Ps", "Child<5"],
-                "address": "18 Del Pilar St., Tibanga",
-                "gps_lat": 8.2272,
-                "gps_lng": 124.2419,
-                "submitted": "Jul 17, 2025 · 4:30 PM",
-                "status": "approved",
-                "members": [
-                    {"name": "Arnel Villa", "relation": "Head", "age": 33},
-                    {"name": "Grace Villa", "relation": "Spouse", "age": 30},
-                    {"name": "Tim Villa", "relation": "Child", "age": 1, "tag": "Child < 5"},
-                ],
-            },
-            {
-                "id": "GAID-2025-08-1045",
-                "family_name": "Rosales",
-                "flags": [],
-                "address": "2 Quezon St., Tibanga",
-                "gps_lat": 8.2249,
-                "gps_lng": 124.2452,
-                "submitted": "Jul 16, 2025 · 1:18 PM",
-                "status": "approved",
-                "members": [
-                    {"name": "Danilo Rosales", "relation": "Head", "age": 52},
-                    {"name": "Fe Rosales", "relation": "Spouse", "age": 49},
-                ],
-            },
-        ],
+        "purok": purok_filter or "All Puroks",
+        "barangay": valid_barangay,
+        # TODO: replace with a real Advisory/Disaster model.
+        "flood_advisory": False,
+        "total_households": households_qs.count(),
+        "unregistered_households": Household.objects.filter(
+            registration_complete=False,
+            barangay__iexact=valid_barangay,
+        ).count(),
+        "households": households,
     }
 
     return JsonResponse(data)
+
+
+@csrf_exempt
+def purok_review_household(request, household_code):
+    """Persists a Purok President's approve/reject decision on a
+    household registration. Called by PurokDashboard.jsx after the
+    reviewer confirms the action in the confirmation modal."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        action = (data.get("action") or "").strip().lower()
+        reviewer_username = (data.get("username") or "").strip()
+
+        if action not in ("approve", "reject"):
+            return JsonResponse({
+                "success": False,
+                "message": "action must be 'approve' or 'reject'."
+            }, status=400)
+
+        try:
+            household = Household.objects.get(household_code=household_code)
+        except Household.DoesNotExist:
+            return JsonResponse({
+                "success": False,
+                "message": "Household not found."
+            }, status=404)
+
+        # A Purok President can only approve/reject households from their
+        # own barangay, resolved from their username (same as the
+        # dashboard listing above) rather than trusting a client-sent value.
+        reviewer_barangay = _barangay_for_username(reviewer_username)
+        if not reviewer_barangay:
+            return JsonResponse({
+                "success": False,
+                "message": "Couldn't determine your assigned barangay. Please log in again."
+            }, status=403)
+
+        if household.barangay.lower() != reviewer_barangay.lower():
+            return JsonResponse({
+                "success": False,
+                "message": "This household is registered under a different barangay."
+            }, status=403)
+
+        household.status = "approved" if action == "approve" else "rejected"
+        household.save()
+
+        return JsonResponse({
+            "success": True,
+            "household_code": household.household_code,
+            "status": household.status,
+        })
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)
 
 # ─────────────────────────────────────────────────────────────
 # Resident app (GEOAID_resident) — households sign in with a mobile
@@ -374,6 +440,27 @@ def login_resident(request):
                 "success": False,
                 "message": "Invalid mobile number or password."
             }, status=401)
+
+        if not household.registration_complete:
+            return JsonResponse({
+                "success": False,
+                "status": "incomplete",
+                "message": "Please finish Steps 2-4 of registration before logging in."
+            }, status=403)
+
+        if household.status == "pending":
+            return JsonResponse({
+                "success": False,
+                "status": "pending",
+                "message": "Your registration is still awaiting approval from your Purok President. You'll be able to log in once it's approved."
+            }, status=403)
+
+        if household.status == "rejected":
+            return JsonResponse({
+                "success": False,
+                "status": "rejected",
+                "message": "Your registration was flagged for correction by your Purok President. Please contact them or re-submit your details."
+            }, status=403)
 
         return JsonResponse({
             "success": True,
@@ -506,6 +593,13 @@ def resident_dashboard(request):
             "success": False,
             "message": "Household not found."
         }, status=404)
+
+    if household.status != "approved":
+        return JsonResponse({
+            "success": False,
+            "status": household.status,
+            "message": "Your registration is not yet approved by your Purok President."
+        }, status=403)
 
     members = []
     for member in household.family_members.all():

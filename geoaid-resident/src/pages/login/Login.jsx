@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import MobileShell from "../../components/MobileShell";
 import BrandMark from "../../components/BrandMark";
 import "./Login.css";
@@ -33,16 +33,29 @@ function PhoneIcon() {
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [mobile, setMobile] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState(location.state?.message || "");
+  const [noticeTone, setNoticeTone] = useState(location.state?.tone || "info");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Clear the router state once we've read it, so refreshing or
+  // navigating back to this screen doesn't keep re-showing the message.
+  useEffect(() => {
+    if (location.state?.message) {
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
+    setNotice("");
 
     const trimmedMobile = mobile.trim();
     if (!trimmedMobile) {
@@ -69,7 +82,15 @@ function Login() {
       const data = await response.json();
 
       if (!response.ok) {
-        setError(data.message || "Invalid mobile number or password.");
+        // "pending" / "rejected" mean the credentials were correct but
+        // the household hasn't been cleared by the Purok President yet —
+        // show that as an informational notice, not a red credentials error.
+        if (data.status === "pending" || data.status === "rejected" || data.status === "incomplete") {
+          setNoticeTone(data.status === "rejected" ? "warning" : "info");
+          setNotice(data.message || "Your account isn't ready to sign in yet.");
+        } else {
+          setError(data.message || "Invalid mobile number or password.");
+        }
         return;
       }
 
@@ -92,6 +113,23 @@ function Login() {
         <p className="login-subheading">Sign in to access your household dashboard</p>
 
         <form onSubmit={handleSubmit} className="login-form">
+          {notice && (
+            <div
+              className={`form-notice ${noticeTone === "warning" ? "form-notice-warning" : "form-notice-info"}`}
+              style={{
+                marginBottom: "12px",
+                padding: "10px 12px",
+                borderRadius: "8px",
+                fontSize: "14px",
+                lineHeight: 1.4,
+                background: noticeTone === "warning" ? "#fff4e5" : "#eaf3ff",
+                color: noticeTone === "warning" ? "#8a5a00" : "#0b4a8f",
+                border: `1px solid ${noticeTone === "warning" ? "#ffdca8" : "#bcdcff"}`,
+              }}
+            >
+              {notice}
+            </div>
+          )}
           {error && <div className="form-error">{error}</div>}
 
           <label htmlFor="mobile">Mobile Number</label>

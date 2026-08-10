@@ -5,12 +5,12 @@ import Sidebar from "../../components/sidebar";
 
 const navItems = ["Dashboard", "Household Registration", "Reports", "Settings"];
 
-const sectionInfo = {
-  "Dashboard": { title: "Purok President Dashboard", subtitle: "Overview of household registrations awaiting your review" },
-  "Household Registration": { title: "Household Registration Review", subtitle: "Verify household submissions, then approve to forward to Barangay Staff" },
-  "Reports": { title: "Reports", subtitle: "Registration activity for your Purok" },
+const sectionInfo = (barangay) => ({
+  "Dashboard": { title: "Purok President Dashboard", subtitle: `Overview of household registrations awaiting your review${barangay ? ` — Brgy. ${barangay}` : ""}` },
+  "Household Registration": { title: "Household Registration Review", subtitle: `Verify household submissions${barangay ? ` from Brgy. ${barangay}` : ""}, then approve to forward to Barangay Staff` },
+  "Reports": { title: "Reports", subtitle: `Registration activity for ${barangay ? `Brgy. ${barangay}` : "your Purok"}` },
   "Settings": { title: "Settings", subtitle: "Manage your Purok President account preferences" },
-};
+});
 
 const FLAG_CLASS = {
   "PWD": "flag-pwd",
@@ -147,15 +147,19 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
               </div>
               <div className="details-row">
                 <dt>GPS coordinates</dt>
-                <dd>{household.gps_lat.toFixed(4)}°N, {household.gps_lng.toFixed(4)}°E</dd>
+                <dd>
+                  {household.gps_lat != null && household.gps_lng != null
+                    ? `${household.gps_lat.toFixed(4)}°N, ${household.gps_lng.toFixed(4)}°E`
+                    : "Not pinned"}
+                </dd>
               </div>
               <div className="details-row">
                 <dt>Purok</dt>
-                <dd>Purok 3</dd>
+                <dd>{household.purok}</dd>
               </div>
               <div className="details-row">
                 <dt>Barangay</dt>
-                <dd>Tibanga, Iligan City</dd>
+                <dd>{household.barangay}</dd>
               </div>
               <div className="details-row">
                 <dt>Total members</dt>
@@ -167,15 +171,49 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
               </div>
             </dl>
 
-            <div className="mini-map">
-              <div className="mini-map-pin" />
-              <span className="mini-map-coord">
-                <MapPinIcon /> {household.gps_lat.toFixed(4)}°N, {household.gps_lng.toFixed(4)}°E
-              </span>
-            </div>
+            {household.gps_lat != null && household.gps_lng != null && (
+              <div className="mini-map">
+                <div className="mini-map-pin" />
+                <span className="mini-map-coord">
+                  <MapPinIcon /> {household.gps_lat.toFixed(4)}°N, {household.gps_lng.toFixed(4)}°E
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
+  if (!action) return null;
+
+  const isApprove = action.type === "approve";
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true">
+      <div className="modal-box">
+        <h3>{isApprove ? "Approve this household?" : "Reject this household?"}</h3>
+        <p>
+          {isApprove
+            ? `${action.familyName} Family will be marked approved and forwarded to Barangay Staff for final confirmation.`
+            : `${action.familyName} Family will be flagged for info issues and sent back for correction.`}
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="modal-btn-cancel" onClick={onCancel} disabled={isSubmitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={`modal-btn-confirm ${isApprove ? "approve" : "reject"}`}
+            onClick={onConfirm}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Please wait…" : isApprove ? "Yes, Approve" : "Yes, Reject"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -193,12 +231,19 @@ function PurokDashboard() {
   const [activeTab, setActiveTab] = useState("pending");
   const [expandedId, setExpandedId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
+  const [isReviewing, setIsReviewing] = useState(false);
+
+  // The backend resolves this account's barangay from `username` itself
+  // (Django admin > Users > First Name), so no extra login-page changes
+  // are needed for this to be scoped correctly.
+  const barangay = dashboardData?.barangay || "";
 
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
         const response = await fetch(
-          "http://127.0.0.1:8000/api/purok/dashboard/"
+          `http://127.0.0.1:8000/api/purok/dashboard/?username=${encodeURIComponent(username)}`
         );
 
         const data = await response.json();
@@ -214,7 +259,7 @@ function PurokDashboard() {
     };
 
     fetchDashboard();
-  }, []);
+  }, [username]);
 
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
@@ -227,31 +272,68 @@ function PurokDashboard() {
     window.setTimeout(() => setToast(null), 3200);
   };
 
-  // NOTE: Approve/Reject only update local state for now — there is no
-  // backend endpoint yet to persist a household's review decision.
-  // Once one exists, replace this with a POST to something like
-  // /api/purok/households/<id>/review/ and refresh from the response.
-  const updateStatus = (id, status, message) => {
-    setHouseholds((prev) => prev.map((h) => (h.id === id ? { ...h, status } : h)));
-    setExpandedId(null);
-    showToast(message);
+  // Approve/Reject require confirmation first (see ConfirmModal below),
+  // then persist via POST /api/purok/households/<id>/review/ so the
+  // decision survives a page refresh instead of only living in state.
+  const requestApprove = (id) => {
+    const h = households.find((x) => x.id === id);
+    setPendingAction({ id, type: "approve", familyName: h.family_name });
   };
 
-  const handleApprove = (id) => {
+  const requestReject = (id) => {
     const h = households.find((x) => x.id === id);
-    updateStatus(id, "approved", `${h.family_name} Family approved and forwarded to Barangay Staff`);
+    setPendingAction({ id, type: "reject", familyName: h.family_name });
   };
 
-  const handleReject = (id) => {
-    const h = households.find((x) => x.id === id);
-    updateStatus(id, "rejected", `${h.family_name} Family flagged for info issues`);
+  const cancelPendingAction = () => {
+    if (isReviewing) return;
+    setPendingAction(null);
+  };
+
+  const confirmPendingAction = async () => {
+    if (!pendingAction) return;
+    setIsReviewing(true);
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/api/purok/households/${pendingAction.id}/review/`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: pendingAction.type, username }),
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        showToast(data.message || "Could not update this household. Please try again.");
+        return;
+      }
+
+      setHouseholds((prev) =>
+        prev.map((h) => (h.id === pendingAction.id ? { ...h, status: data.status } : h))
+      );
+      setExpandedId(null);
+      showToast(
+        pendingAction.type === "approve"
+          ? `${pendingAction.familyName} Family approved and forwarded to Barangay Staff`
+          : `${pendingAction.familyName} Family flagged for info issues`
+      );
+    } catch (err) {
+      console.error(err);
+      showToast("Unable to connect to the server. Make sure the Django backend is running.");
+    } finally {
+      setIsReviewing(false);
+      setPendingAction(null);
+    }
   };
 
   const toggleExpand = (id) => {
     setExpandedId((current) => (current === id ? null : id));
   };
 
-  const { title, subtitle } = sectionInfo[activeItem];
+  const { title, subtitle } = sectionInfo(barangay)[activeItem];
 
   if (loading) {
     return (
@@ -386,8 +468,8 @@ function PurokDashboard() {
                   household={h}
                   expanded={expandedId === h.id}
                   onToggle={toggleExpand}
-                  onApprove={handleApprove}
-                  onReject={handleReject}
+                  onApprove={requestApprove}
+                  onReject={requestReject}
                 />
               ))}
             </div>
@@ -413,6 +495,12 @@ function PurokDashboard() {
       </div>
 
       {toast && <div className="toast">{toast}</div>}
+      <ConfirmModal
+        action={pendingAction}
+        onConfirm={confirmPendingAction}
+        onCancel={cancelPendingAction}
+        isSubmitting={isReviewing}
+      />
     </div>
   );
 }

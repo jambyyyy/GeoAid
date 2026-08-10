@@ -52,6 +52,13 @@ class Household(models.Model):
     # Set once Steps 2-4 have all been submitted via register/complete/
     registration_complete = models.BooleanField(default=False)
 
+    STATUS_CHOICES = [
+        ("pending", "Pending Review"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
+
     def set_password(self, raw_password):
         self.password_hash = make_password(raw_password)
 
