@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json
+import uuid
 
 from .models import Household, FamilyMember
 
@@ -552,6 +553,10 @@ def register_complete(request):
                 pwd_detail=(m.get("pwd_detail") or "").strip(),
                 is_pregnant=bool(m.get("is_pregnant")),
                 pregnant_detail=(m.get("pregnant_detail") or "").strip(),
+                # Opaque per-member token for evacuation-center QR check-in.
+                # Random/unguessable on purpose — never derived from name or
+                # mobile number, since the QR code is shown/printed openly.
+                qr_code=uuid.uuid4().hex,
             ))
 
         return JsonResponse({
@@ -616,14 +621,18 @@ def resident_dashboard(request):
             flags.append("4Ps")
 
         members.append({
+            "id": member.id,
             "name": member.full_name,
             "role": "Head of Household" if member.relation == "Head" else member.relation,
             "flags": flags,
+            # Sent as "qr_token" to match what QRCodeScreen.js expects.
+            "qr_token": member.qr_code,
         })
 
     household_name = f"{household.full_name.split(' ')[-1]} Household" if household.full_name else "Household"
 
     data = {
+        "household_id": household.id,
         "household_name": household_name,
         "unread_alerts": 2,
         # TODO: replace with a real Advisory/Disaster model + geo lookup.

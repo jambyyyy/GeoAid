@@ -15,22 +15,13 @@ const FALLBACK_BARANGAYS = [
   "Tipanoy",
 ];
 
-const FALLBACK_DWELLING_TYPES = [
-  { value: "concrete", label: "Concrete" },
-  { value: "semi_concrete", label: "Semi-concrete" },
-  { value: "wood", label: "Wood / Light materials" },
-  { value: "makeshift", label: "Makeshift / Informal settler structure" },
-];
-
 function HouseholdStep({ initialValue, onContinue }) {
   const [barangays, setBarangays] = useState(FALLBACK_BARANGAYS);
-  const [dwellingTypes, setDwellingTypes] = useState(FALLBACK_DWELLING_TYPES);
 
   const [barangay, setBarangay] = useState(initialValue?.barangay || "");
   const [purok, setPurok] = useState(initialValue?.purok || "");
   const [addressLine, setAddressLine] = useState(initialValue?.addressLine || "");
   const [landmark, setLandmark] = useState(initialValue?.landmark || "");
-  const [dwellingType, setDwellingType] = useState(initialValue?.dwellingType || "");
   const [gps, setGps] = useState(
     initialValue?.gpsLat && initialValue?.gpsLng
       ? { lat: initialValue.gpsLat, lng: initialValue.gpsLng }
@@ -44,7 +35,6 @@ function HouseholdStep({ initialValue, onContinue }) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.barangays?.length) setBarangays(data.barangays);
-        if (data?.dwelling_types?.length) setDwellingTypes(data.dwelling_types);
       })
       .catch(() => {
         // Backend not reachable yet — the fallback lists above keep the
@@ -93,17 +83,12 @@ function HouseholdStep({ initialValue, onContinue }) {
       setError("Please enter your house no. / street address.");
       return;
     }
-    if (!dwellingType) {
-      setError("Please select your dwelling type.");
-      return;
-    }
 
     onContinue({
       barangay,
       purok: purok.trim(),
       addressLine: addressLine.trim(),
       landmark: landmark.trim(),
-      dwellingType,
       gpsLat: gps?.lat ?? null,
       gpsLng: gps?.lng ?? null,
     });
@@ -151,16 +136,6 @@ function HouseholdStep({ initialValue, onContinue }) {
         value={landmark}
         onChangeText={setLandmark}
       />
-
-      <Text style={styles.label}>Dwelling Type</Text>
-      <View style={styles.pickerWrap}>
-        <Picker selectedValue={dwellingType} onValueChange={setDwellingType}>
-          <Picker.Item label="Select dwelling type" value="" />
-          {dwellingTypes.map((d) => (
-            <Picker.Item key={d.value} label={d.label} value={d.value} />
-          ))}
-        </Picker>
-      </View>
 
       <Text style={styles.label}>GPS Pin</Text>
       <TouchableOpacity

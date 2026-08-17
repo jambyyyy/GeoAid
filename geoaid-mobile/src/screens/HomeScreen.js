@@ -110,7 +110,10 @@ function HomeScreen({ navigation }) {
               <NavIconArrow />
               <Text style={styles.quickActionLabel}>Evacuation Route</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickAction, { backgroundColor: "#eaf0fb" }]}>
+            <TouchableOpacity
+              style={[styles.quickAction, { backgroundColor: "#eaf0fb" }]}
+              onPress={() => navigation.navigate("QRCode")}
+            >
               <QRIcon />
               <Text style={styles.quickActionLabel}>My QR Code</Text>
             </TouchableOpacity>

@@ -55,7 +55,6 @@ function RegisterScreen({ navigation }) {
       purok: household?.purok,
       address_line: household?.addressLine,
       landmark: household?.landmark,
-      dwelling_type: household?.dwellingType,
       gps_lat: household?.gpsLat,
       gps_lng: household?.gpsLng,
       is_four_ps: isFourPs,
