@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import "./login.css";
 import hero from "../../assets/images/iligan_city.jpg";
 import cityLogo from "../../assets/images/logo.jpg";
+import { API_URL } from "../../config";
 
 function UserIcon() {
   return (
@@ -151,7 +152,7 @@ function Login() {
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/login/",
+        `${API_URL}/api/login/`,
         {
           method: "POST",
           headers: {

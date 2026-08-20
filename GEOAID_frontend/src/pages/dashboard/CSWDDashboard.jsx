@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
+import { API_URL } from "../../config";
 
 const navItems = [
   "Dashboard",
@@ -56,7 +57,7 @@ function CSWDDashboard() {
     const fetchDashboard = async () => {
       try {
         const response = await fetch(
-          "http://127.0.0.1:8000/api/cswd/dashboard/"
+          `${API_URL}/api/cswd/dashboard/`
         );
 
         const data = await response.json();

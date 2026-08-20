@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 function getApiUrl() {
-  const port = 8000;
+  const port = 8080;
 
   if (__DEV__) {
     if (Platform.OS === 'web') {

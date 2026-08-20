@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./PurokDashboard.css";
 import Sidebar from "../../components/sidebar";
+import { API_URL } from "../../config";
 
 const navItems = ["Dashboard", "Household Registration", "Reports", "Settings"];
 
@@ -243,7 +244,7 @@ function PurokDashboard() {
     const fetchDashboard = async () => {
       try {
         const response = await fetch(
-          `http://127.0.0.1:8000/api/purok/dashboard/?username=${encodeURIComponent(username)}`
+          `${API_URL}/api/purok/dashboard/?username=${encodeURIComponent(username)}`
         );
 
         const data = await response.json();
@@ -296,7 +297,7 @@ function PurokDashboard() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/api/purok/households/${pendingAction.id}/review/`,
+        `${API_URL}/api/purok/households/${pendingAction.id}/review/`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
