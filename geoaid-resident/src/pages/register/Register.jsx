@@ -6,6 +6,7 @@ import AccountStep from "./AccountStep";
 import HouseholdStep from "./HouseholdStep";
 import MembersStep from "./MembersStep";
 import VulnerabilityStep from "./VulnerabilityStep";
+import { API_URL } from "../../config";
 import "./Register.css";
 
 function Register() {
@@ -71,7 +72,7 @@ function Register() {
     };
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/resident/register/complete/", {
+      const response = await fetch(`${API_URL}/api/resident/register/complete/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

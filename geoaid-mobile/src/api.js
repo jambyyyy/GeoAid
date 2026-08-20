@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 function getApiUrl() {
-  const port = 8080;
+  const port = 8000; // must match Django's port (see manage.py runserver)
 
   if (__DEV__) {
     if (Platform.OS === 'web') {

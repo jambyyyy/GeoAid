@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "../../config";
 import "./HouseholdStep.css";
 
 const FALLBACK_BARANGAYS = [
@@ -50,7 +51,7 @@ function HouseholdStep({ initialValue, onContinue }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/api/resident/register/lookups/")
+    fetch(`${API_URL}/api/resident/register/lookups/`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.barangays?.length) setBarangays(data.barangays);

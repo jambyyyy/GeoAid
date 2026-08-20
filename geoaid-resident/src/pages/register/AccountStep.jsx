@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_URL } from "../../config";
 import "./AccountStep.css";
 
 function ShieldIcon() {
@@ -47,7 +48,7 @@ function AccountStep({ onContinue }) {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/resident/register/", {
+      const response = await fetch(`${API_URL}/api/resident/register/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

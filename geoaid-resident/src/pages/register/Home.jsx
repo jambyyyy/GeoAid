@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import MobileShell from "../../components/MobileShell";
 import BottomNav from "../../components/BottomNav";
+import { API_URL } from "../../config";
 import "./Home.css";
 
 function BellIcon() {
@@ -102,7 +103,7 @@ function Home() {
 
       try {
         const response = await fetch(
-          `http://127.0.0.1:8000/api/resident/dashboard/?mobile_number=${encodeURIComponent(mobileNumber)}`
+          `${API_URL}/api/resident/dashboard/?mobile_number=${encodeURIComponent(mobileNumber)}`
         );
         if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
         const json = await response.json();
