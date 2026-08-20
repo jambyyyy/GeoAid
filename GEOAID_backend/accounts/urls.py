@@ -2,6 +2,9 @@ from django.urls import path
 from .views import (
     login_user,
     cswd_dashboard,
+    drrm_dashboard,
+    barangay_dashboard,
+    barangay_confirm_household,
     purok_dashboard,
     purok_review_household,
     register_resident,
@@ -14,6 +17,9 @@ from .views import (
 urlpatterns = [
     path('login/', login_user, name='login'),
     path("cswd/dashboard/", cswd_dashboard),
+    path("drrm/dashboard/", drrm_dashboard),
+    path("barangay/dashboard/", barangay_dashboard),
+    path("barangay/households/<str:household_code>/confirm/", barangay_confirm_household),
     path("purok/dashboard/", purok_dashboard),
     path("purok/households/<str:household_code>/review/", purok_review_household),
 

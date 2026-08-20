@@ -52,9 +52,14 @@ class Household(models.Model):
     # Set once Steps 2-4 have all been submitted via register/complete/
     registration_complete = models.BooleanField(default=False)
 
+    # Lifecycle: resident submits (pending) -> Purok President reviews
+    # (approved/rejected) -> if approved, Barangay Staff gives final
+    # confirmation (confirmed/rejected). Only "confirmed" households are
+    # surfaced city-wide to CSWD and DRRM dashboards.
     STATUS_CHOICES = [
         ("pending", "Pending Review"),
-        ("approved", "Approved"),
+        ("approved", "Approved by Purok President"),
+        ("confirmed", "Confirmed by Barangay Staff"),
         ("rejected", "Rejected"),
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./dashboard.css";
 import Sidebar from "../../components/sidebar";
+import { API_URL } from "../../config";
 
 const navItems = [
   "Dashboard",
@@ -12,33 +13,30 @@ const navItems = [
   "Reports",
 ];
 
-// --- Dashboard overview data ---
-const stats = [
-  { label: "Pending Registrations", value: "9", tone: "danger" },
-  { label: "Center Occupancy", value: "142/300", tone: "warning" },
-  { label: "Checked-In Households", value: "58", tone: "info" },
-  { label: "Relief Claims Processed", value: "31", tone: "success" },
-];
+const sectionInfo = (barangay) => ({
+  "Dashboard": { title: "Barangay Staff Dashboard", subtitle: `Evacuation & Relief Operations${barangay ? ` — Brgy. ${barangay}` : ""}` },
+  "Household Registration": { title: "Household Registration", subtitle: `Give final confirmation to households already approved by your Purok Presidents${barangay ? ` in Brgy. ${barangay}` : ""}` },
+  "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy and status across barangay evacuation sites" },
+  "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed to registered households" },
+  "Attendance": { title: "Evacuation Center Attendance", subtitle: "Resident check-ins confirmed via QR code scan" },
+  "Reports": { title: "Reports", subtitle: "Situation, disaster monitoring, and relief & vulnerability reports" },
+});
 
-const recentActivity = [
-  { time: "10:32 AM", event: "Household #0231 (Purok 4) registration confirmed and forwarded to CSWD", type: "report" },
-  { time: "09:50 AM", event: "QR code scanned — Familia Dela Cruz checked in at Poblacion Elementary Evac. Center", type: "update" },
-  { time: "09:15 AM", event: "Evacuation center occupancy updated: 142/300 at Poblacion Elementary", type: "dispatch" },
-  { time: "08:40 AM", event: "3 pending household registrations awaiting Purok President verification", type: "alert" },
-  { time: "07:55 AM", event: "Relief goods disbursement recorded for 12 households — Tracking No. RD-1042", type: "report" },
-];
+const FLAG_CLASS = {
+  "PWD": "flag-pwd",
+  "4Ps": "flag-4ps",
+  "Pregnant": "flag-pregnant",
+  "Elderly": "flag-elderly",
+  "Child<5": "flag-child5",
+};
 
-// --- Household table (matches household + confirmation_status from the Data Dictionary) ---
-const households = [
-  { id: "HH-0231", representative: "Maria Dela Cruz", purok: "Purok 4", registrationYear: 2026, status: "confirmed" },
-  { id: "HH-0232", representative: "Ronaldo Sarmiento", purok: "Purok 2", registrationYear: 2026, status: "pending" },
-  { id: "HH-0233", representative: "Elena Bautista", purok: "Purok 7", registrationYear: 2026, status: "confirmed" },
-  { id: "HH-0234", representative: "Jomar Villareal", purok: "Purok 1", registrationYear: 2026, status: "pending" },
-  { id: "HH-0235", representative: "Corazon Ibanez", purok: "Purok 3", registrationYear: 2026, status: "rejected" },
-  { id: "HH-0236", representative: "Danilo Fernandez", purok: "Purok 5", registrationYear: 2026, status: "pending" },
-];
+const STATUS_LABEL = {
+  approved: "Pending your confirmation",
+  confirmed: "Confirmed — visible to CSWD/DRRM",
+  rejected: "Rejected",
+};
 
-// --- Evacuation centers (matches evacuation_center table) ---
+// --- Static placeholders (no backing model yet) ---
 const evacuationCenters = [
   { name: "Poblacion Elementary School", address: "Brgy. Poblacion", capacity: 300, occupancy: 142, status: "open" },
   { name: "Brgy. Hinaplanon Covered Court", address: "Brgy. Hinaplanon", capacity: 150, occupancy: 150, status: "full" },
@@ -46,7 +44,6 @@ const evacuationCenters = [
   { name: "Tibanga National High School", address: "Brgy. Tibanga", capacity: 200, occupancy: 0, status: "closed" },
 ];
 
-// --- Relief distribution (matches relief_distribution table) ---
 const reliefDistribution = [
   { household: "Maria Dela Cruz", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1042", status: "claimed" },
   { household: "Elena Bautista", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1043", status: "claimed" },
@@ -54,44 +51,324 @@ const reliefDistribution = [
   { household: "Jomar Villareal", quantityGiven: 1, date: "Jul 13, 2026", trackingNo: "RD-1045", status: "unclaimed" },
 ];
 
-// --- Attendance (matches attendance table — one row per resident QR check-in) ---
 const attendanceRecords = [
   { resident: "Maria Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
   { resident: "Juan Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
   { resident: "Ronaldo Sarmiento", household: "Sarmiento Household", center: "Poblacion Elementary", checkIn: "08:05 AM", checkOut: "—", status: "present" },
-  { resident: "Liza Sarmiento", household: "Sarmiento Household", center: "Poblacion Elementary", checkIn: "08:05 AM", checkOut: "—", status: "present" },
-  { resident: "Elena Bautista", household: "Bautista Household", center: "Brgy. Hinaplanon Covered Court", checkIn: "06:58 AM", checkOut: "11:20 AM", status: "checked-out" },
-  { resident: "Corazon Ibanez", household: "Ibanez Household", center: "Brgy. Hinaplanon Covered Court", checkIn: "07:15 AM", checkOut: "—", status: "present" },
 ];
 
-// --- Reports (matches report table — report_type enum) ---
 const reports = [
   { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
   { title: "Situation Report — Flood Watch, Poblacion", type: "situation", date: "Jul 12, 2026" },
   { title: "Disaster Monitoring Summary — Week 28", type: "disaster_monitoring", date: "Jul 11, 2026" },
-  { title: "Situation Report — Evacuation Center Occupancy", type: "situation", date: "Jul 10, 2026" },
 ];
+
+function CheckIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+      <path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+      <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ open }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      style={{ transform: open ? "rotate(180deg)" : "none", transition: "0.2s" }}
+    >
+      <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function HouseholdCard({ household, expanded, onToggle, onConfirm, onReject }) {
+  const head = household.members.find((m) => m.relation === "Head") || household.members[0];
+
+  return (
+    <div className="household-card">
+      <div className="household-header">
+        <div className="household-avatar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            <circle cx="10" cy="7" r="4" stroke="currentColor" strokeWidth="1.75" />
+            <path d="M17.5 3.5a4 4 0 0 1 0 7.5M22 21v-2a4 4 0 0 0-3-3.87" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+          </svg>
+        </div>
+
+        <div className="household-info">
+          <div className="household-title-row">
+            <span className="household-name">{household.family_name} Family</span>
+            <span className="household-gaid">{household.id}</span>
+            {household.flags.map((flag) => (
+              <span key={flag} className={`flag-badge ${FLAG_CLASS[flag] || ""}`}>{flag}</span>
+            ))}
+          </div>
+          <p className="household-meta">
+            Head: {head?.name || "—"} · {household.members.length} members · {household.address}
+          </p>
+          <p className="household-submitted">Purok {household.purok} · Submitted {household.submitted}</p>
+        </div>
+
+        <div className="household-actions">
+          {household.status === "approved" ? (
+            <>
+              <button type="button" className="btn-review" onClick={() => onToggle(household.id)}>
+                <ChevronIcon open={expanded} />
+                {expanded ? "Collapse" : "Review"}
+              </button>
+              <button type="button" className="btn-approve" onClick={() => onConfirm(household.id)}>
+                <CheckIcon /> Confirm
+              </button>
+              <button type="button" className="btn-reject" onClick={() => onReject(household.id)}>
+                <XIcon /> Reject
+              </button>
+            </>
+          ) : (
+            <span className={`status-pill status-pill-${household.status}`}>{STATUS_LABEL[household.status]}</span>
+          )}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="household-body">
+          <div>
+            <p className="household-body-label">Family members</p>
+            <div className="members-list">
+              {household.members.map((m) => (
+                <div key={m.name} className="member-row">
+                  <div className="member-avatar">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.75" />
+                      <path d="M4 20c0-3.314 3.582-6 8-6s8 2.686 8 6" stroke="currentColor" strokeWidth="1.75" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="member-name">{m.name}</p>
+                    <p className="member-meta">
+                      {m.relation} · Age {m.age}
+                      {m.tag && <span className="member-tag"> · {m.tag}</span>}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="household-body-label">Household details</p>
+            <dl className="details-list">
+              <div className="details-row">
+                <dt>Address</dt>
+                <dd>{household.address}</dd>
+              </div>
+              <div className="details-row">
+                <dt>Purok</dt>
+                <dd>{household.purok}</dd>
+              </div>
+              <div className="details-row">
+                <dt>Barangay</dt>
+                <dd>{household.barangay}</dd>
+              </div>
+              <div className="details-row">
+                <dt>Total members</dt>
+                <dd>{household.members.length} persons</dd>
+              </div>
+              <div className="details-row">
+                <dt>Priority flags</dt>
+                <dd>{household.flags.length ? household.flags.join(", ") : "None"}</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
+  if (!action) return null;
+
+  const isConfirm = action.type === "confirm";
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true">
+      <div className="modal-box">
+        <h3>{isConfirm ? "Confirm this household?" : "Reject this household?"}</h3>
+        <p>
+          {isConfirm
+            ? `${action.familyName} Family will be marked confirmed and become visible to CSWD and DRRM.`
+            : `${action.familyName} Family will be flagged for correction and sent back.`}
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="modal-btn-cancel" onClick={onCancel} disabled={isSubmitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={`modal-btn-confirm ${isConfirm ? "approve" : "reject"}`}
+            onClick={onConfirm}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Please wait…" : isConfirm ? "Yes, Confirm" : "Yes, Reject"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Dashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "Barangay Staff";
   const [activeItem, setActiveItem] = useState("Dashboard");
 
+  const [dashboardData, setDashboardData] = useState(null);
+  const [households, setHouseholds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [activeTab, setActiveTab] = useState("approved");
+  const [expandedId, setExpandedId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
+  const [isReviewing, setIsReviewing] = useState(false);
+
+  // Resolved server-side from this account's First Name (Django admin >
+  // Users), same convention Purok President dashboards use.
+  const barangay = dashboardData?.barangay || "";
+
+  useEffect(() => {
+    const fetchDashboard = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/barangay/dashboard/?username=${encodeURIComponent(username)}`
+        );
+
+        const data = await response.json();
+
+        setDashboardData(data);
+        setHouseholds(data.households || []);
+      } catch (err) {
+        console.error(err);
+        setError("Failed to load dashboard data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboard();
+  }, [username]);
+
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
+    sessionStorage.removeItem("geoaid_role");
     navigate("/");
   };
 
-  const sectionInfo = {
-    "Dashboard": { title: "Barangay Staff Dashboard", subtitle: "Barangay Poblacion — Evacuation & Relief Operations" },
-    "Household Registration": { title: "Household Registration", subtitle: "Verify and confirm household records submitted by residents" },
-    "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy and status across barangay evacuation sites" },
-    "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed to registered households" },
-    "Attendance": { title: "Evacuation Center Attendance", subtitle: "Resident check-ins confirmed via QR code scan" },
-    "Reports": { title: "Reports", subtitle: "Situation, disaster monitoring, and relief & vulnerability reports" },
+  const showToast = (message) => {
+    setToast(message);
+    window.setTimeout(() => setToast(null), 3200);
   };
 
-  const { title, subtitle } = sectionInfo[activeItem];
+  const requestConfirm = (id) => {
+    const h = households.find((x) => x.id === id);
+    setPendingAction({ id, type: "confirm", familyName: h.family_name });
+  };
+
+  const requestReject = (id) => {
+    const h = households.find((x) => x.id === id);
+    setPendingAction({ id, type: "reject", familyName: h.family_name });
+  };
+
+  const cancelPendingAction = () => {
+    if (isReviewing) return;
+    setPendingAction(null);
+  };
+
+  const confirmPendingAction = async () => {
+    if (!pendingAction) return;
+    setIsReviewing(true);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/barangay/households/${pendingAction.id}/confirm/`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: pendingAction.type, username }),
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        showToast(data.message || "Could not update this household. Please try again.");
+        return;
+      }
+
+      setHouseholds((prev) =>
+        prev.map((h) => (h.id === pendingAction.id ? { ...h, status: data.status } : h))
+      );
+      setExpandedId(null);
+      showToast(
+        pendingAction.type === "confirm"
+          ? `${pendingAction.familyName} Family confirmed and forwarded to CSWD/DRRM`
+          : `${pendingAction.familyName} Family flagged for correction`
+      );
+    } catch (err) {
+      console.error(err);
+      showToast("Unable to connect to the server. Make sure the Django backend is running.");
+    } finally {
+      setIsReviewing(false);
+      setPendingAction(null);
+    }
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedId((current) => (current === id ? null : id));
+  };
+
+  const { title, subtitle } = sectionInfo(barangay)[activeItem];
+
+  if (loading) {
+    return (
+      <div className="dashboard-page">
+        <div className="loading-container">
+          <h2>Loading Dashboard...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="dashboard-page">
+        <div className="error-container">
+          <h2>{error}</h2>
+        </div>
+      </div>
+    );
+  }
+
+  const counts = {
+    approved: households.filter((h) => h.status === "approved").length,
+    confirmed: households.filter((h) => h.status === "confirmed").length,
+    rejected: households.filter((h) => h.status === "rejected").length,
+  };
+
+  const visibleHouseholds = households.filter((h) => h.status === activeTab);
 
   return (
     <div className="dashboard-page">
@@ -119,28 +396,37 @@ function Dashboard() {
         {activeItem === "Dashboard" && (
           <>
             <section className="stats-grid">
-              {stats.map((stat) => (
-                <article key={stat.label} className={`stat-card stat-${stat.tone}`}>
-                  <span className="stat-value">{stat.value}</span>
-                  <span className="stat-label">{stat.label}</span>
-                </article>
-              ))}
+              <article className="stat-card stat-warning">
+                <span className="stat-value">{counts.approved}</span>
+                <span className="stat-label">Pending Your Confirmation</span>
+              </article>
+              <article className="stat-card stat-success">
+                <span className="stat-value">{counts.confirmed}</span>
+                <span className="stat-label">Confirmed Households</span>
+              </article>
+              <article className="stat-card stat-danger">
+                <span className="stat-value">{counts.rejected}</span>
+                <span className="stat-label">Rejected</span>
+              </article>
+              <article className="stat-card stat-info">
+                <span className="stat-value">{dashboardData?.unregistered_households ?? 0}</span>
+                <span className="stat-label">Unregistered in {barangay || "Barangay"}</span>
+              </article>
             </section>
 
             <section className="content-grid">
               <article className="panel">
-                <h2>Recent Activity</h2>
-                <ul className="activity-list">
-                  {recentActivity.map((item) => (
-                    <li key={item.time + item.event}>
-                      <span className="activity-time">{item.time}</span>
-                      <div>
-                        <p>{item.event}</p>
-                        <span className={`activity-type type-${item.type}`}>{item.type}</span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <h2>Your role</h2>
+                <p className="panel-note">
+                  Give final confirmation to household registrations already reviewed and approved by their Purok
+                  President{barangay ? ` in Brgy. ${barangay}` : ""}. Once confirmed, a household becomes visible
+                  city-wide to CSWD and DRRM Officers.
+                </p>
+                {counts.approved > 0 && (
+                  <p className="panel-note">
+                    {counts.approved} household{counts.approved === 1 ? "" : "s"} awaiting your confirmation right now.
+                  </p>
+                )}
               </article>
 
               <article className="panel">
@@ -160,29 +446,33 @@ function Dashboard() {
 
         {activeItem === "Household Registration" && (
           <section className="panel">
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Household ID</th>
-                    <th>Representative</th>
-                    <th>Purok</th>
-                    <th>Registration Year</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {households.map((h) => (
-                    <tr key={h.id}>
-                      <td>{h.id}</td>
-                      <td>{h.representative}</td>
-                      <td>{h.purok}</td>
-                      <td>{h.registrationYear}</td>
-                      <td><span className={`status-badge status-${h.status}`}>{h.status}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="subtabs">
+              {["approved", "confirmed", "rejected"].map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  className={`subtab ${activeTab === tab ? "active" : ""}`}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {tab === "approved" ? "Pending Confirmation" : tab === "confirmed" ? "Confirmed" : "Rejected"} ({counts[tab]})
+                </button>
+              ))}
+            </div>
+
+            <div className="household-list">
+              {visibleHouseholds.length === 0 && (
+                <p className="empty-state">No households in this list yet.</p>
+              )}
+              {visibleHouseholds.map((h) => (
+                <HouseholdCard
+                  key={h.id}
+                  household={h}
+                  expanded={expandedId === h.id}
+                  onToggle={toggleExpand}
+                  onConfirm={requestConfirm}
+                  onReject={requestReject}
+                />
+              ))}
             </div>
           </section>
         )}
@@ -213,6 +503,7 @@ function Dashboard() {
                 </tbody>
               </table>
             </div>
+            <p className="panel-note">Evacuation center data isn't backed by a real model yet — shown for layout only.</p>
           </section>
         )}
 
@@ -242,6 +533,7 @@ function Dashboard() {
                 </tbody>
               </table>
             </div>
+            <p className="panel-note">Relief distribution data isn't backed by a real model yet — shown for layout only.</p>
           </section>
         )}
 
@@ -298,6 +590,14 @@ function Dashboard() {
           </section>
         )}
       </div>
+
+      {toast && <div className="toast">{toast}</div>}
+      <ConfirmModal
+        action={pendingAction}
+        onConfirm={confirmPendingAction}
+        onCancel={cancelPendingAction}
+        isSubmitting={isReviewing}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 function getApiUrl() {
-  const port = 8080; // change this the day your Django port changes — nowhere else
+  const port = 8000; // change this the day your Django port changes — nowhere else
 
   if (import.meta.env.DEV) {
     // Use whatever hostname the browser is actually loaded from —

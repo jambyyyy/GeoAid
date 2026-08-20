@@ -5,6 +5,7 @@ import Login from "./pages/login/login";
 
 import Dashboard from "./pages/dashboard/dashboard";
 import CSWDDashboard from "./pages/dashboard/CSWDDashboard";
+import DRRMDashboard from "./pages/dashboard/DRRMDashboard";
 import PurokDashboard from "./pages/dashboard/PurokDashboard";
 
 function App() {
@@ -20,6 +21,9 @@ function App() {
 
         {/* CSWD */}
         <Route path="/cswd-dashboard" element={<CSWDDashboard />} />
+
+        {/* DRRM Officer */}
+        <Route path="/drrm-dashboard" element={<DRRMDashboard />} />
 
         {/* Purok President */}
         <Route path="/purok-dashboard" element={<PurokDashboard />} />

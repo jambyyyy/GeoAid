@@ -36,6 +36,15 @@
     gap: 12px;
 }
 
+.advisory-badge {
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #b45309;
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .user-badge {
     padding: 8px 12px;
     border-radius: 999px;
@@ -59,6 +68,16 @@
 
 .logout-btn:hover {
     background: #1d4ed8;
+}
+
+.loading-container,
+.error-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    width: 100%;
+    color: #64748b;
 }
 
 .stats-grid {
@@ -111,51 +130,16 @@
     margin-bottom: 18px;
 }
 
-.activity-list {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.activity-list li {
-    display: grid;
-    grid-template-columns: 80px 1fr;
-    gap: 12px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.activity-list li:last-child {
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-.activity-time {
-    font-size: 12px;
-    font-weight: 600;
+.panel-note {
     color: #64748b;
-}
-
-.activity-list p {
     font-size: 14px;
-    line-height: 1.45;
-    margin-bottom: 4px;
+    line-height: 1.6;
+    margin-bottom: 10px;
 }
 
-.activity-type {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
+.panel-note:last-child {
+    margin-bottom: 0;
 }
-
-.type-alert { background: #fee2e2; color: #b91c1c; }
-.type-dispatch { background: #dbeafe; color: #1d4ed8; }
-.type-update { background: #fef3c7; color: #b45309; }
-.type-report { background: #d1fae5; color: #047857; }
 
 .action-grid {
     display: grid;
@@ -179,7 +163,7 @@
     background: #dbeafe;
 }
 
-/* --- Household registration review (real data from Purok President) --- */
+/* --- Household registration review --- */
 
 .subtabs {
     display: flex;
@@ -345,8 +329,7 @@
     font-weight: 600;
 }
 
-.status-pill-approved { background: #fef3c7; color: #b45309; }
-.status-pill-confirmed { background: #d1fae5; color: #047857; }
+.status-pill-approved { background: #d1fae5; color: #047857; }
 .status-pill-rejected { background: #fee2e2; color: #b91c1c; }
 
 .flag-badge {
@@ -455,6 +438,41 @@
     text-align: right;
 }
 
+.mini-map {
+    position: relative;
+    margin-top: 12px;
+    height: 96px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #0f6e56 0%, #085041 55%, #04342c 100%);
+}
+
+.mini-map-pin {
+    position: absolute;
+    left: 48%;
+    top: 42%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.28);
+}
+
+.mini-map-coord {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+}
+
 .toast {
     position: fixed;
     left: 50%;
@@ -557,108 +575,6 @@
     cursor: not-allowed;
 }
 
-.loading-container,
-.error-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    width: 100%;
-    color: #64748b;
-}
-
-.table-scroll {
-    overflow-x: auto;
-}
-
-.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-}
-
-.data-table th {
-    text-align: left;
-    padding: 10px 14px;
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #64748b;
-    border-bottom: 1px solid #e5e7eb;
-    white-space: nowrap;
-}
-
-.data-table td {
-    padding: 12px 14px;
-    border-bottom: 1px solid #f1f5f9;
-    color: #111827;
-    white-space: nowrap;
-}
-
-.data-table tbody tr:last-child td {
-    border-bottom: none;
-}
-
-.data-table tbody tr:hover {
-    background: #f8fafc;
-}
-
-.status-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-
-.status-confirmed,
-.status-claimed,
-.status-open,
-.status-present { background: #d1fae5; color: #047857; }
-
-.status-pending { background: #fef3c7; color: #b45309; }
-
-.status-rejected,
-.status-unclaimed,
-.status-full { background: #fee2e2; color: #b91c1c; }
-
-.status-closed,
-.status-checked-out { background: #e2e8f0; color: #475569; }
-
-.reports-list {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.reports-list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.reports-list li:last-child {
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-.report-title {
-    font-size: 14px;
-    font-weight: 600;
-    margin-bottom: 2px;
-}
-
-.report-date {
-    font-size: 12px;
-    color: #64748b;
-}
-
 @media (max-width: 1100px) {
     .stats-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -700,4 +616,106 @@
         flex: 1;
         justify-content: center;
     }
+}
+.list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 14px;
+}
+
+.list li:last-child {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.list li span.value {
+    font-weight: 700;
+    color: #2563eb;
+}
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.data-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+    border-bottom: 1px solid #e5e7eb;
+    white-space: nowrap;
+}
+
+.data-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #111827;
+}
+
+.data-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+    background: #f8fafc;
+}
+
+/* --- DRRM-specific: barangay breakdown bars --- */
+
+.breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.breakdown-row {
+    display: grid;
+    grid-template-columns: 140px 1fr 40px;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+}
+
+.breakdown-label {
+    font-weight: 600;
+    color: #334155;
+}
+
+.breakdown-bar-track {
+    height: 10px;
+    border-radius: 999px;
+    background: #eef2ff;
+    overflow: hidden;
+}
+
+.breakdown-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: #2563eb;
+}
+
+.breakdown-value {
+    text-align: right;
+    font-weight: 700;
+    color: #111827;
 }

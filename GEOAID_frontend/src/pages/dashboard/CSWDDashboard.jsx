@@ -16,6 +16,14 @@ const navItems = [
   "Settings",
 ];
 
+const FLAG_CLASS = {
+  "PWD": "flag-pwd",
+  "4Ps": "flag-4ps",
+  "Pregnant": "flag-pregnant",
+  "Elderly": "flag-elderly",
+  "Child<5": "flag-child5",
+};
+
 const sectionInfo = {
   "Dashboard": { title: "CSWD Dashboard", subtitle: "City Social Welfare & Development — Relief & Beneficiary Operations" },
   "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed across barangays" },
@@ -263,11 +271,44 @@ function CSWDDashboard() {
 
         {activeItem === "Households" && (
           <section className="panel">
-            <p className="panel-note">
-              {dashboardData?.total_households ?? 0} households are currently registered under CSWD monitoring.
-              A detailed household registry view is coming soon — for now, check Priority Beneficiaries and
-              Vulnerability Profiles for at-risk households.
-            </p>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Household</th>
+                    <th>Barangay</th>
+                    <th>Purok</th>
+                    <th>Members</th>
+                    <th>Flags</th>
+                    <th>Submitted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(dashboardData?.households || []).length > 0 ? (
+                    dashboardData.households.map((h) => (
+                      <tr key={h.id}>
+                        <td>{h.family_name} Family ({h.id})</td>
+                        <td>{h.barangay}</td>
+                        <td>{h.purok}</td>
+                        <td>{h.members.length}</td>
+                        <td>
+                          {h.flags.length
+                            ? h.flags.map((f) => (
+                              <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
+                            ))
+                            : "—"}
+                        </td>
+                        <td>{h.submitted}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="6">No confirmed households yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
 

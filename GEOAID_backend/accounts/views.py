@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -144,53 +145,283 @@ def login_user(request):
         }, status=500)
 
 
+def _serialize_households(households_qs):
+    """Shared household -> JSON shape used by every staff dashboard
+    (Purok, Barangay, CSWD, DRRM) so a resident's registration renders
+    identically everywhere it appears."""
+
+    households = []
+    for h in households_qs:
+        flags = set()
+        member_payload = []
+
+        for m in h.family_members.all():
+            tag = None
+            if m.is_pwd:
+                flags.add("PWD")
+                tag = f"PWD - {m.pwd_detail}" if m.pwd_detail else "PWD"
+            if m.is_pregnant:
+                flags.add("Pregnant")
+                tag = f"Pregnant - {m.pregnant_detail}" if m.pregnant_detail else "Pregnant"
+            if m.is_elderly:
+                flags.add("Elderly")
+            if m.is_child_under5:
+                flags.add("Child<5")
+
+            member_payload.append({
+                "name": m.full_name,
+                "relation": m.relation,
+                "age": m.age,
+                "tag": tag,
+            })
+
+        if h.is_four_ps:
+            flags.add("4Ps")
+
+        households.append({
+            "id": h.household_code,
+            "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
+            "flags": sorted(flags),
+            "address": h.address_line or "Address not provided",
+            "purok": h.purok or "—",
+            "barangay": h.barangay or "—",
+            "gps_lat": h.gps_lat,
+            "gps_lng": h.gps_lng,
+            "submitted": h.created_at.strftime("%b %d, %Y · %I:%M %p"),
+            "status": h.status,
+            "members": member_payload,
+        })
+
+    return households
+
+
+def _priority_beneficiary_counts(households_qs):
+    """Aggregate vulnerability counts (senior citizens, PWD, pregnant,
+    children<5) across every FamilyMember in the given Household
+    queryset. Shared by CSWD (city-wide) and DRRM (city-wide) dashboards."""
+
+    members = FamilyMember.objects.filter(household__in=households_qs)
+    return {
+        "senior_citizens": members.filter(age__gte=60).count(),
+        "pwd": members.filter(is_pwd=True).count(),
+        "pregnant": members.filter(is_pregnant=True).count(),
+        "children": members.filter(age__lt=5).count(),
+    }
+
+
 @csrf_exempt
 def cswd_dashboard(request):
+    """City-wide CSWD view of every household that has cleared the full
+    Purok President -> Barangay Staff review chain (status='confirmed').
+    Relief/donation figures don't have a backing model yet, so those
+    stay as clearly-labeled placeholders until that feature exists."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    confirmed_qs = (
+        Household.objects
+        .filter(registration_complete=True, status="confirmed")
+        .prefetch_related("family_members")
+        .order_by("-created_at")
+    )
+
+    priority = _priority_beneficiary_counts(confirmed_qs)
+    priority_cases = confirmed_qs.filter(
+        Q(family_members__is_pwd=True)
+        | Q(family_members__is_pregnant=True)
+        | Q(family_members__age__gte=60)
+        | Q(family_members__age__lt=5)
+        | Q(is_four_ps=True)
+    ).distinct().count()
+
+    relief_distribution = [
+        {
+            "barangay": row["barangay"] or "Unspecified",
+            "families": row["total"],
+            # TODO: replace with a real ReliefDistribution model; for now
+            # every confirmed household is just "Registered" and awaiting
+            # an actual relief-goods disbursement record.
+            "status": "Registered",
+        }
+        for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
+    ]
 
     data = {
-        "total_households": 1254,
-        "priority_cases": 346,
-        "relief_released": 4562,
-        "donations": 85000,
+        "total_households": confirmed_qs.count(),
+        "priority_cases": priority_cases,
+        # TODO: relief_released and donations need a real
+        # Relief/Donation model — no such data exists yet.
+        "relief_released": 0,
+        "donations": 0,
 
-        "relief_distribution": [
-            {
-                "barangay": "Apao",
-                "families": 54,
-                "status": "Completed"
-            },
-            {
-                "barangay": "Pala-o",
-                "families": 42,
-                "status": "Ongoing"
-            },
-            {
-                "barangay": "Tibanga",
-                "families": 31,
-                "status": "Pending"
-            }
+        "relief_distribution": relief_distribution,
+        "priority_beneficiaries": priority,
+
+        # TODO: replace with a real EvacuationCenter model.
+        "evacuation_centers": [
+            {"name": "Apao Gymnasium", "occupancy": "120 / 200"},
+            {"name": "Hinaplanon Covered Court", "occupancy": "95 / 150"},
         ],
 
-        "priority_beneficiaries": {
-            "senior_citizens": 120,
-            "pwd": 75,
-            "pregnant": 36,
-            "children": 98
-        },
-
-        "evacuation_centers": [
-            {
-                "name": "Apao Gymnasium",
-                "occupancy": "120 / 200"
-            },
-            {
-                "name": "Hinaplanon Covered Court",
-                "occupancy": "95 / 150"
-            }
-        ]
+        "households": _serialize_households(confirmed_qs),
     }
 
     return JsonResponse(data)
+
+
+@csrf_exempt
+def drrm_dashboard(request):
+    """City-wide DRRM Officer view — every barangay's registration
+    pipeline at a glance, plus the fully-confirmed household roster used
+    for evacuation/relief planning. DRRM Officers aren't scoped to a
+    single barangay the way Purok Presidents / Barangay Staff are."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    all_qs = Household.objects.filter(registration_complete=True)
+    confirmed_qs = (
+        all_qs.filter(status="confirmed")
+        .prefetch_related("family_members")
+        .order_by("-created_at")
+    )
+
+    barangay_breakdown = [
+        {
+            "barangay": row["barangay"] or "Unspecified",
+            "households": row["total"],
+        }
+        for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
+    ]
+
+    data = {
+        "total_households": confirmed_qs.count(),
+        "pending_review": all_qs.filter(status="pending").count(),
+        "awaiting_barangay_confirmation": all_qs.filter(status="approved").count(),
+        "rejected": all_qs.filter(status="rejected").count(),
+        "priority_beneficiaries": _priority_beneficiary_counts(confirmed_qs),
+        "barangay_breakdown": barangay_breakdown,
+        "households": _serialize_households(confirmed_qs),
+    }
+
+    return JsonResponse(data)
+
+
+@csrf_exempt
+def barangay_dashboard(request):
+    """Real household registrations for Barangay Staff — specifically
+    the ones a Purok President has already approved and forwarded, which
+    Barangay Staff give final confirmation on before they become visible
+    city-wide to CSWD/DRRM. Scoped to the staff account's barangay the
+    same way purok_dashboard is (via First Name in Django admin)."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    username_param = (request.GET.get("username") or "").strip()
+    barangay_override = (request.GET.get("barangay") or "").strip()
+
+    valid_barangay = _barangay_for_username(username_param) or _match_barangay(barangay_override)
+
+    if not valid_barangay:
+        return JsonResponse({
+            "barangay": "",
+            "total_households": 0,
+            "pending_confirmation": 0,
+            "rejected_households": 0,
+            "unregistered_households": 0,
+            "households": [],
+            "message": (
+                "Couldn't determine this account's barangay. "
+                "Set its First Name in Django admin > Users to its barangay (e.g. 'Tubod')."
+            ),
+        })
+
+    households_qs = (
+        Household.objects
+        .filter(registration_complete=True, barangay__iexact=valid_barangay)
+        .exclude(status="pending")  # Purok President hasn't reviewed these yet
+        .prefetch_related("family_members")
+        .order_by("-created_at")
+    )
+
+    data = {
+        "barangay": valid_barangay,
+        "total_households": households_qs.filter(status="confirmed").count(),
+        "pending_confirmation": households_qs.filter(status="approved").count(),
+        "rejected_households": households_qs.filter(status="rejected").count(),
+        "unregistered_households": Household.objects.filter(
+            registration_complete=False,
+            barangay__iexact=valid_barangay,
+        ).count(),
+        "households": _serialize_households(households_qs),
+    }
+
+    return JsonResponse(data)
+
+
+@csrf_exempt
+def barangay_confirm_household(request, household_code):
+    """Persists a Barangay Staff member's confirm/reject decision on a
+    household that a Purok President already approved. This is the last
+    step before a household becomes visible to CSWD and DRRM."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        action = (data.get("action") or "").strip().lower()
+        reviewer_username = (data.get("username") or "").strip()
+
+        if action not in ("confirm", "reject"):
+            return JsonResponse({
+                "success": False,
+                "message": "action must be 'confirm' or 'reject'."
+            }, status=400)
+
+        try:
+            household = Household.objects.get(household_code=household_code)
+        except Household.DoesNotExist:
+            return JsonResponse({
+                "success": False,
+                "message": "Household not found."
+            }, status=404)
+
+        reviewer_barangay = _barangay_for_username(reviewer_username)
+        if not reviewer_barangay:
+            return JsonResponse({
+                "success": False,
+                "message": "Couldn't determine your assigned barangay. Please log in again."
+            }, status=403)
+
+        if household.barangay.lower() != reviewer_barangay.lower():
+            return JsonResponse({
+                "success": False,
+                "message": "This household is registered under a different barangay."
+            }, status=403)
+
+        if household.status != "approved":
+            return JsonResponse({
+                "success": False,
+                "message": "This household hasn't been approved by a Purok President yet."
+            }, status=400)
+
+        household.status = "confirmed" if action == "confirm" else "rejected"
+        household.save()
+
+        return JsonResponse({
+            "success": True,
+            "household_code": household.household_code,
+            "status": household.status,
+        })
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)
 
 
 @csrf_exempt
@@ -345,6 +576,12 @@ def purok_review_household(request, household_code):
                 "success": False,
                 "message": "This household is registered under a different barangay."
             }, status=403)
+
+        if household.status != "pending":
+            return JsonResponse({
+                "success": False,
+                "message": "This household has already been reviewed."
+            }, status=400)
 
         household.status = "approved" if action == "approve" else "rejected"
         household.save()
@@ -599,7 +836,7 @@ def resident_dashboard(request):
             "message": "Household not found."
         }, status=404)
 
-    if household.status != "approved":
+    if household.status not in ("approved", "confirmed"):
         return JsonResponse({
             "success": False,
             "status": household.status,
