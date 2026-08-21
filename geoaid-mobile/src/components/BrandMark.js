@@ -19,13 +19,13 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 16,
-    backgroundColor: "#0b4a8f",
+    backgroundColor: "#2563eb",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 10,
   },
-  title: { fontSize: 22, fontWeight: "700", color: "#0b1f3a" },
-  subtitle: { fontSize: 13, color: "#6b7280", marginTop: 2 },
+  title: { fontSize: 22, fontWeight: "700", color: "#0f172a" },
+  subtitle: { fontSize: 13, color: "#64748b", marginTop: 2 },
 });
 
 export default BrandMark;

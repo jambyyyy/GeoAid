@@ -283,7 +283,6 @@ function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const goToLogin = () => navigate("/login");
-  const goToRegister = () => navigate("/register");
 
   const scrollToSection = (id) => {
     setMenuOpen(false);
@@ -320,9 +319,6 @@ function Landing() {
           <button type="button" className="nav-login-btn" onClick={goToLogin}>
             Log In
           </button>
-          <button type="button" className="nav-register-btn" onClick={goToRegister}>
-            Register as Resident
-          </button>
           <button
             type="button"
             className="nav-menu-toggle"
@@ -340,7 +336,6 @@ function Landing() {
             </button>
           ))}
           <button type="button" onClick={goToLogin}>Log In</button>
-          <button type="button" onClick={goToRegister}>Register as Resident</button>
         </div>
       </header>
 
@@ -362,9 +357,6 @@ function Landing() {
               <button type="button" className="btn-primary" onClick={goToLogin}>
                 Log In to Dashboard
                 <IconWrap name="arrowRight" size={16} />
-              </button>
-              <button type="button" className="btn-secondary" onClick={goToRegister}>
-                Register as Resident
               </button>
             </div>
 
@@ -536,14 +528,10 @@ function Landing() {
       <section className="cta-band">
         <h2>Ready to Protect Your Community?</h2>
         <p>
-          Register your household today and ensure your family is counted,
-          verified, and prioritized when it matters most.
+          Residents register and manage their household through the GeoAid mobile app.
+          Barangay, Purok, CSWD, and DRRM staff log in below.
         </p>
         <div className="cta-actions">
-          <button type="button" className="btn-cta-primary" onClick={goToRegister}>
-            Register as Resident
-            <IconWrap name="arrowRight" size={16} />
-          </button>
           <button type="button" className="btn-cta-secondary" onClick={goToLogin}>
             Staff Login
           </button>
@@ -580,7 +568,6 @@ function Landing() {
             <h5>Platform</h5>
             <ul>
               <li><button type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>Landing Page</button></li>
-              <li><button type="button" onClick={goToRegister}>Resident Mobile App</button></li>
               <li><button type="button" onClick={goToLogin}>Staff Web Dashboard</button></li>
               <li><button type="button">Component Library</button></li>
             </ul>

@@ -20,7 +20,7 @@ function BottomNav({ active, onSelect }) {
             accessibilityRole="button"
             accessibilityLabel={label}
           >
-            <Icon color={isActive ? "#0b4a8f" : "#9aa3af"} />
+            <Icon color={isActive ? "#2563eb" : "#9aa3af"} />
             <Text style={[styles.label, isActive && styles.labelActive]}>{label}</Text>
           </TouchableOpacity>
         );
@@ -38,8 +38,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   tab: { flex: 1, alignItems: "center", gap: 4 },
-  label: { fontSize: 11, color: "#9aa3af" },
-  labelActive: { color: "#0b4a8f", fontWeight: "600" },
+  label: { fontSize: 12, color: "#9aa3af" },
+  labelActive: { color: "#2563eb", fontWeight: "600" },
 });
 
 export default BottomNav;

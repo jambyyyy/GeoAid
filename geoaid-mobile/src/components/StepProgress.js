@@ -32,12 +32,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  dotDone: { backgroundColor: "#1a7a4c" },
-  dotActive: { backgroundColor: "#0b4a8f" },
-  dotText: { fontSize: 12, color: "#6b7280", fontWeight: "600" },
+  dotDone: { backgroundColor: "#16a34a" },
+  dotActive: { backgroundColor: "#2563eb" },
+  dotText: { fontSize: 12, color: "#64748b", fontWeight: "600" },
   dotTextActive: { color: "#fff" },
   line: { flex: 1, height: 2, backgroundColor: "#e5e7eb", marginHorizontal: 4 },
-  lineDone: { backgroundColor: "#1a7a4c" },
+  lineDone: { backgroundColor: "#16a34a" },
 });
 
 export default StepProgress;

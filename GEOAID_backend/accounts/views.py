@@ -807,12 +807,13 @@ def register_complete(request):
 
 
 def register_lookups(request):
-    """Barangay + dwelling type options for HouseholdStep.jsx's
+    """Barangay + purok + dwelling type options for HouseholdStep.jsx's
     dropdowns, sourced from the model's choices so there's one place
     to update them instead of duplicating the lists in the frontend."""
 
     return JsonResponse({
         "barangays": [value for value, _label in Household.BARANGAY_CHOICES],
+        "puroks": Household.PUROK_CHOICES_BY_BARANGAY,
         "dwelling_types": [
             {"value": value, "label": label}
             for value, label in Household.DWELLING_TYPE_CHOICES

@@ -153,7 +153,7 @@ const styles = StyleSheet.create({
   continueBtn: {
     flexDirection: "row",
     gap: 8,
-    backgroundColor: "#0b4a8f",
+    backgroundColor: "#2563eb",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",

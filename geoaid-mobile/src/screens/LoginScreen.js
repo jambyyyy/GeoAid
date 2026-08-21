@@ -10,7 +10,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import BrandMark from "../components/BrandMark";
-import { EyeIcon, PhoneIcon } from "../components/icons";
+import { EyeIcon } from "../components/icons";
 import { API_BASE } from "../api";
 
 function LoginScreen({ navigation, route }) {
@@ -144,17 +144,6 @@ function LoginScreen({ navigation, route }) {
           >
             <Text style={styles.signinBtnText}>{isSubmitting ? "Signing in..." : "Sign In"}</Text>
           </TouchableOpacity>
-
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity style={styles.otpBtn} disabled={isSubmitting}>
-            <PhoneIcon />
-            <Text style={styles.otpBtnText}>Sign in with OTP</Text>
-          </TouchableOpacity>
         </View>
 
         <TouchableOpacity style={styles.footerRow} onPress={() => navigation.navigate("Register")}>
@@ -169,13 +158,13 @@ function LoginScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   screen: { padding: 20, paddingBottom: 40 },
-  heading: { fontSize: 22, fontWeight: "700", textAlign: "center", marginTop: 12, color: "#0b1f3a" },
-  subheading: { fontSize: 13, color: "#6b7280", textAlign: "center", marginTop: 4, marginBottom: 20 },
+  heading: { fontSize: 22, fontWeight: "700", textAlign: "center", marginTop: 12, color: "#0f172a" },
+  subheading: { fontSize: 13, color: "#64748b", textAlign: "center", marginTop: 4, marginBottom: 20 },
   form: {},
   notice: { padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1 },
   noticeInfo: { backgroundColor: "#eaf3ff", borderColor: "#bcdcff" },
   noticeWarning: { backgroundColor: "#fff4e5", borderColor: "#ffdca8" },
-  noticeTextInfo: { color: "#0b4a8f", fontSize: 14, lineHeight: 20 },
+  noticeTextInfo: { color: "#2563eb", fontSize: 14, lineHeight: 20 },
   noticeTextWarning: { color: "#8a5a00", fontSize: 14, lineHeight: 20 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -201,9 +190,9 @@ const styles = StyleSheet.create({
   passwordInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
   eyeToggle: { padding: 4 },
   forgotRow: { alignItems: "flex-end", marginTop: 8 },
-  forgotLink: { fontSize: 13, color: "#0b4a8f" },
+  forgotLink: { fontSize: 13, color: "#2563eb" },
   signinBtn: {
-    backgroundColor: "#0b4a8f",
+    backgroundColor: "#2563eb",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
@@ -211,23 +200,9 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.6 },
   signinBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-  dividerRow: { flexDirection: "row", alignItems: "center", marginVertical: 18, gap: 10 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: "#e5e7eb" },
-  dividerText: { fontSize: 12, color: "#9aa3af" },
-  otpBtn: {
-    flexDirection: "row",
-    gap: 8,
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  otpBtnText: { fontSize: 14, fontWeight: "600", color: "#374151" },
   footerRow: { marginTop: 24, alignItems: "center" },
-  footerText: { fontSize: 13, color: "#6b7280" },
-  footerLink: { color: "#0b4a8f", fontWeight: "600" },
+  footerText: { fontSize: 13, color: "#64748b" },
+  footerLink: { color: "#2563eb", fontWeight: "600" },
 });
 
 export default LoginScreen;

@@ -1,6 +1,6 @@
 import Svg, { Path, Circle, Rect } from "react-native-svg";
 
-export function ShieldIcon({ size = 18, color = "#0b4a8f" }) {
+export function ShieldIcon({ size = 18, color = "#2563eb" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4Z" stroke={color} strokeWidth="1.75" />
@@ -8,7 +8,7 @@ export function ShieldIcon({ size = 18, color = "#0b4a8f" }) {
   );
 }
 
-export function BellIcon({ size = 18, color = "#1a1a1a" }) {
+export function BellIcon({ size = 18, color = "#0f172a" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M12 3v3M4 20h16L18 15a6 6 0 0 0-12 0Z" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
@@ -26,7 +26,7 @@ export function WarnIcon({ size = 18, color = "#b45309" }) {
   );
 }
 
-export function NavIconArrow({ size = 18, color = "#1a7a4c" }) {
+export function NavIconArrow({ size = 18, color = "#16a34a" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M3 11l18-7-7 18-2.5-7.5L3 11Z" stroke={color} strokeWidth="1.75" strokeLinejoin="round" />
@@ -34,7 +34,7 @@ export function NavIconArrow({ size = 18, color = "#1a7a4c" }) {
   );
 }
 
-export function QRIcon({ size = 18, color = "#0b1f4f" }) {
+export function QRIcon({ size = 18, color = "#2563eb" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Rect x="3" y="3" width="7" height="7" rx="1" stroke={color} strokeWidth="1.75" />
@@ -54,7 +54,7 @@ export function ClockIcon({ size = 18, color = "#b45309" }) {
   );
 }
 
-export function PinIcon({ size = 14, color = "#1a1a1a" }) {
+export function PinIcon({ size = 14, color = "#0f172a" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12Z" stroke={color} strokeWidth="1.75" />
@@ -63,7 +63,7 @@ export function PinIcon({ size = 14, color = "#1a1a1a" }) {
   );
 }
 
-export function EyeIcon({ off, size = 18, color = "#666" }) {
+export function EyeIcon({ off, size = 18, color = "#64748b" }) {
   return off ? (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.24 4.24" stroke={color} strokeWidth="1.75" strokeLinecap="round" />
@@ -82,7 +82,7 @@ export function EyeIcon({ off, size = 18, color = "#666" }) {
   );
 }
 
-export function PhoneIcon({ size = 16, color = "#1a1a1a" }) {
+export function PhoneIcon({ size = 16, color = "#0f172a" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -103,7 +103,7 @@ export function ArrowRightIcon({ size = 16, color = "#fff" }) {
   );
 }
 
-export function BackIcon({ size = 16, color = "#1a1a1a" }) {
+export function BackIcon({ size = 16, color = "#0f172a" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M15 6l-6 6 6 6" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -111,7 +111,7 @@ export function BackIcon({ size = 16, color = "#1a1a1a" }) {
   );
 }
 
-export function PlusIcon({ size = 16, color = "#0b4a8f" }) {
+export function PlusIcon({ size = 16, color = "#2563eb" }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M12 5v14M5 12h14" stroke={color} strokeWidth="2" strokeLinecap="round" />

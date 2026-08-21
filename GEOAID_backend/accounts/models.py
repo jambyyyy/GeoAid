@@ -12,6 +12,9 @@ class Household(models.Model):
     a mobile number + password, not a username, and don't need
     Django's admin/permissions machinery."""
 
+    # Registration is intentionally limited to Iligan City's flood-prone
+    # barangays for now (no "Other") — these are the same 7 named in the
+    # landing page hero copy and covered by CDRRMO flood advisories.
     BARANGAY_CHOICES = [
         ("Mahayahay", "Mahayahay"),
         ("Tambacan", "Tambacan"),
@@ -20,8 +23,24 @@ class Household(models.Model):
         ("Pala-o Riverside", "Pala-o Riverside"),
         ("Tubod", "Tubod"),
         ("Tipanoy", "Tipanoy"),
-        ("Other", "Other"),
     ]
+
+    # Purok/Zone options per barangay, sourced from CDRRMO flood advisories,
+    # news coverage of Tropical Storm Basyang (Feb 2026) and Typhoon Sendong,
+    # and barangay purok listings — prioritizing puroks that show up
+    # repeatedly as flood/landslide-affected so the most at-risk areas are
+    # selectable, not just numbered placeholders. Each barangay actually has
+    # many more puroks than this; this list is a starting point, not the
+    # full official roster.
+    PUROK_CHOICES_BY_BARANGAY = {
+        "Mahayahay": ["Riverside Zone 1", "Riverside Zone 2", "Purok 3"],
+        "Tambacan": ["Purok 1-A", "Purok 2-A", "Purok 4-B", "Purok 8", "Purok 8-A", "Purok 9"],
+        "Abuno": ["Purok 6 (Malindawag)", "Panul-iran"],
+        "Hinaplanon": ["Purok Dao", "Bayug Island"],
+        "Pala-o Riverside": ["Purok 15", "Zone 7 / Purok 6"],
+        "Tubod": ["Purok Manuang", "Purok Green Valley"],
+        "Tipanoy": ["Purok 1-A (Bernales)", "Purok 4 (Upper Pindugangan)", "Purok 5"],
+    }
 
     DWELLING_TYPE_CHOICES = [
         ("concrete", "Concrete"),

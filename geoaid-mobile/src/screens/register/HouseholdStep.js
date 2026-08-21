@@ -5,6 +5,7 @@ import * as Location from "expo-location";
 import { PinIcon, ArrowRightIcon } from "../../components/icons";
 import { API_BASE } from "../../api";
 
+// Registration is limited to Iligan City's flood-prone barangays for now.
 const FALLBACK_BARANGAYS = [
   "Mahayahay",
   "Tambacan",
@@ -15,12 +16,24 @@ const FALLBACK_BARANGAYS = [
   "Tipanoy",
 ];
 
+// Mirrors Household.PUROK_CHOICES_BY_BARANGAY on the backend — kept in
+// sync as a fallback in case /register/lookups/ isn't reachable yet.
+const FALLBACK_PUROKS = {
+  Mahayahay: ["Riverside Zone 1", "Riverside Zone 2", "Purok 3"],
+  Tambacan: ["Purok 1-A", "Purok 2-A", "Purok 4-B", "Purok 8", "Purok 8-A", "Purok 9"],
+  Abuno: ["Purok 6 (Malindawag)", "Panul-iran"],
+  Hinaplanon: ["Purok Dao", "Bayug Island"],
+  "Pala-o Riverside": ["Purok 15", "Zone 7 / Purok 6"],
+  Tubod: ["Purok Manuang", "Purok Green Valley"],
+  Tipanoy: ["Purok 1-A (Bernales)", "Purok 4 (Upper Pindugangan)", "Purok 5"],
+};
+
 function HouseholdStep({ initialValue, onContinue }) {
   const [barangays, setBarangays] = useState(FALLBACK_BARANGAYS);
+  const [puroksByBarangay, setPuroksByBarangay] = useState(FALLBACK_PUROKS);
 
   const [barangay, setBarangay] = useState(initialValue?.barangay || "");
   const [purok, setPurok] = useState(initialValue?.purok || "");
-  const [addressLine, setAddressLine] = useState(initialValue?.addressLine || "");
   const [landmark, setLandmark] = useState(initialValue?.landmark || "");
   const [gps, setGps] = useState(
     initialValue?.gpsLat && initialValue?.gpsLng
@@ -30,17 +43,27 @@ function HouseholdStep({ initialValue, onContinue }) {
   const [gpsStatus, setGpsStatus] = useState("idle"); // idle | locating | done | error
   const [error, setError] = useState("");
 
+  const puroksForBarangay = puroksByBarangay[barangay] || [];
+
   useEffect(() => {
     fetch(`${API_BASE}/api/resident/register/lookups/`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.barangays?.length) setBarangays(data.barangays);
+        if (data?.puroks) setPuroksByBarangay(data.puroks);
       })
       .catch(() => {
         // Backend not reachable yet — the fallback lists above keep the
         // form usable while offline/dev server is starting up.
       });
   }, []);
+
+  // Reset purok whenever barangay changes so a stale purok from a
+  // different barangay never gets submitted.
+  const handleBarangayChange = (value) => {
+    setBarangay(value);
+    setPurok("");
+  };
 
   const pinLocation = async () => {
     setGpsStatus("locating");
@@ -75,19 +98,14 @@ function HouseholdStep({ initialValue, onContinue }) {
       setError("Please select your barangay.");
       return;
     }
-    if (!purok.trim()) {
-      setError("Please enter your Purok/Zone.");
-      return;
-    }
-    if (!addressLine.trim()) {
-      setError("Please enter your house no. / street address.");
+    if (!purok) {
+      setError("Please select your Purok/Zone.");
       return;
     }
 
     onContinue({
       barangay,
-      purok: purok.trim(),
-      addressLine: addressLine.trim(),
+      purok,
       landmark: landmark.trim(),
       gpsLat: gps?.lat ?? null,
       gpsLng: gps?.lng ?? null,
@@ -104,30 +122,30 @@ function HouseholdStep({ initialValue, onContinue }) {
 
       <Text style={styles.label}>Barangay</Text>
       <View style={styles.pickerWrap}>
-        <Picker selectedValue={barangay} onValueChange={setBarangay}>
+        <Picker selectedValue={barangay} onValueChange={handleBarangayChange}>
           <Picker.Item label="Select barangay" value="" />
           {barangays.map((b) => (
             <Picker.Item key={b} label={b} value={b} />
           ))}
-          <Picker.Item label="Other" value="Other" />
         </Picker>
       </View>
 
       <Text style={styles.label}>Purok / Zone</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. Purok 3"
-        value={purok}
-        onChangeText={setPurok}
-      />
-
-      <Text style={styles.label}>House No. / Street</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. 12 Mabuhay St."
-        value={addressLine}
-        onChangeText={setAddressLine}
-      />
+      <View style={styles.pickerWrap}>
+        <Picker
+          selectedValue={purok}
+          onValueChange={setPurok}
+          enabled={!!barangay}
+        >
+          <Picker.Item
+            label={barangay ? "Select purok/zone" : "Select a barangay first"}
+            value=""
+          />
+          {puroksForBarangay.map((p) => (
+            <Picker.Item key={p} label={p} value={p} />
+          ))}
+        </Picker>
+      </View>
 
       <Text style={styles.label}>Nearest Landmark (optional)</Text>
       <TextInput
@@ -182,11 +200,11 @@ const styles = StyleSheet.create({
   },
   pinBtnDone: { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
   pinBtnText: { fontSize: 14, fontWeight: "600", color: "#374151" },
-  gpsHint: { fontSize: 12, color: "#6b7280", marginTop: 8, lineHeight: 17 },
+  gpsHint: { fontSize: 12, color: "#64748b", marginTop: 8, lineHeight: 17 },
   continueBtn: {
     flexDirection: "row",
     gap: 8,
-    backgroundColor: "#0b4a8f",
+    backgroundColor: "#2563eb",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",

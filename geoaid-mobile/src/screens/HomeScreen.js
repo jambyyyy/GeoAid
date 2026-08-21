@@ -7,7 +7,7 @@ import { BellIcon, WarnIcon, NavIconArrow, QRIcon, ClockIcon, PinIcon } from "..
 import { API_BASE } from "../api";
 
 const FLAG_STYLE = {
-  "4Ps": { backgroundColor: "#eaf3ff", color: "#0b4a8f" },
+  "4Ps": { backgroundColor: "#eaf3ff", color: "#2563eb" },
   PWD: { backgroundColor: "#f3e8ff", color: "#7e22ce" },
   Pregnant: { backgroundColor: "#fce7f3", color: "#be185d" },
   Elderly: { backgroundColor: "#fef3c7", color: "#b45309" },
@@ -181,7 +181,7 @@ function HomeScreen({ navigation }) {
                             key={f}
                             style={[styles.flagBadge, { backgroundColor: FLAG_STYLE[f]?.backgroundColor || "#eee" }]}
                           >
-                            <Text style={{ color: FLAG_STYLE[f]?.color || "#333", fontSize: 11, fontWeight: "600" }}>
+                            <Text style={{ color: FLAG_STYLE[f]?.color || "#0f172a", fontSize: 12, fontWeight: "600" }}>
                               {f}
                             </Text>
                           </View>
@@ -222,8 +222,8 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
   },
-  greeting: { fontSize: 13, color: "#6b7280" },
-  householdName: { fontSize: 20, fontWeight: "700", color: "#0b1f3a" },
+  greeting: { fontSize: 13, color: "#64748b" },
+  householdName: { fontSize: 20, fontWeight: "700", color: "#0f172a" },
   bellBtn: { padding: 8 },
   bellBadge: {
     position: "absolute",
@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  bellBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  bellBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   body: { paddingHorizontal: 20, paddingBottom: 24, gap: 18 },
   advisoryCard: {
     flexDirection: "row",
@@ -252,23 +252,23 @@ const styles = StyleSheet.create({
   advisoryBody: { fontSize: 12, color: "#7c2d12" },
   quickActions: { flexDirection: "row", gap: 10 },
   quickAction: { flex: 1, borderRadius: 12, padding: 12, alignItems: "center", gap: 6 },
-  quickActionLabel: { fontSize: 11, fontWeight: "600", color: "#374151", textAlign: "center" },
+  quickActionLabel: { fontSize: 12, fontWeight: "600", color: "#374151", textAlign: "center" },
   section: {},
   sectionLabel: { fontSize: 13, fontWeight: "700", color: "#374151", marginBottom: 8 },
   centerPanel: { backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#eef0f3" },
   centerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  centerName: { fontWeight: "700", fontSize: 15, color: "#0b1f3a" },
-  centerMeta: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+  centerName: { fontWeight: "700", fontSize: 15, color: "#0f172a" },
+  centerMeta: { fontSize: 12, color: "#64748b", marginTop: 2 },
   statusPill: { backgroundColor: "#dcfce7", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
-  statusPillText: { color: "#15803d", fontSize: 11, fontWeight: "700" },
+  statusPillText: { color: "#15803d", fontSize: 12, fontWeight: "700" },
   occupancyRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 14 },
-  occupancyLabel: { fontSize: 12, color: "#6b7280" },
+  occupancyLabel: { fontSize: 12, color: "#64748b" },
   occupancyBar: { height: 6, backgroundColor: "#eef0f3", borderRadius: 3, marginTop: 6, overflow: "hidden" },
-  occupancyFill: { height: 6, backgroundColor: "#0b4a8f" },
+  occupancyFill: { height: 6, backgroundColor: "#2563eb" },
   directionsBtn: {
     flexDirection: "row",
     gap: 6,
-    backgroundColor: "#0b4a8f",
+    backgroundColor: "#2563eb",
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: "center",
@@ -277,7 +277,7 @@ const styles = StyleSheet.create({
   },
   directionsBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
   membersEmpty: { backgroundColor: "#fff", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#eef0f3" },
-  membersEmptyText: { fontSize: 13, color: "#6b7280", textAlign: "center" },
+  membersEmptyText: { fontSize: 13, color: "#64748b", textAlign: "center" },
   membersList: { gap: 8 },
   memberRow: {
     flexDirection: "row",
@@ -292,7 +292,7 @@ const styles = StyleSheet.create({
   memberAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#e5e7eb" },
   memberInfo: { flex: 1 },
   memberName: { fontWeight: "600", fontSize: 14, color: "#111827" },
-  memberRole: { fontSize: 12, color: "#6b7280" },
+  memberRole: { fontSize: 12, color: "#64748b" },
   memberFlags: { flexDirection: "row", flexWrap: "wrap", gap: 4, maxWidth: 100 },
   flagBadge: { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
 });
