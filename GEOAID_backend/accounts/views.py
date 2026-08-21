@@ -60,6 +60,37 @@ def _barangay_for_username(username):
     return _match_barangay(user.first_name)
 
 
+def _purok_for_username(username, barangay=None):
+    """Looks up a staff username's Django user and matches their Last
+    Name (Django admin > Users) against the purok/zone list for their
+    barangay. Mirrors _barangay_for_username, but for the purok a
+    Purok President account is scoped to (set by
+    `create_purok_presidents`). Returns '' if the account isn't
+    scoped to a specific purok (e.g. legacy accounts created before
+    per-purok scoping)."""
+
+    username = (username or "").strip()
+    if not username:
+        return ""
+    try:
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return ""
+
+    barangay = barangay or _match_barangay(user.first_name)
+    if not barangay:
+        return ""
+
+    last_name = (user.last_name or "").strip().lower()
+    if not last_name:
+        return ""
+
+    for purok in Household.PUROK_CHOICES_BY_BARANGAY.get(barangay, []):
+        if purok.strip().lower() == last_name:
+            return purok
+    return ""
+
+
 @csrf_exempt
 def login_user(request):
 
@@ -115,13 +146,15 @@ def login_user(request):
                 }, status=403)
 
             barangay_assignment = ""
+            purok_assignment = ""
             if actual_role == "purok":
-                # Best-effort only for now — barangay is stored on the
-                # user's First Name field (Django admin > Users), but a
-                # Purok President can still log in even if it's not set
-                # yet. Dashboard filtering by barangay is not enforced
-                # until the frontend is wired up to send it.
+                # Barangay is stored on the user's First Name field, and
+                # (for accounts created via `create_purok_presidents`)
+                # the specific purok/zone is stored on Last Name — both
+                # in Django admin > Users. A Purok President can still
+                # log in even if these aren't set yet.
                 barangay_assignment = _match_barangay(user.first_name)
+                purok_assignment = _purok_for_username(user.username, barangay_assignment)
 
             response_payload = {
                 "success": True,
@@ -130,6 +163,7 @@ def login_user(request):
             }
             if actual_role == "purok":
                 response_payload["barangay"] = barangay_assignment
+                response_payload["purok"] = purok_assignment
 
             return JsonResponse(response_payload)
 
@@ -431,10 +465,13 @@ def purok_dashboard(request):
     Household/FamilyMember records created via register_resident +
     register_complete.
 
-    TODO: once Purok Presidents are scoped to a specific purok (not just
-    barangay) via a staff-user -> purok mapping, filter households_qs by
-    that purok too instead of only the optional ?purok= query param below.
-    Same for flood_advisory, which needs a real Advisory/Disaster model.
+    Purok Presidents created via `create_purok_presidents` are scoped to
+    one specific purok (Last Name in Django admin > Users), not just a
+    barangay, so households_qs is filtered down to that purok
+    automatically. The ?purok= query param is kept as a manual
+    override/fallback for legacy accounts that aren't purok-scoped yet.
+
+    TODO: flood_advisory still needs a real Advisory/Disaster model.
     """
 
     if request.method == "OPTIONS":
@@ -462,6 +499,13 @@ def purok_dashboard(request):
             ),
         })
 
+    # An account created by `create_purok_presidents` has its purok
+    # pinned via Last Name — that takes priority over the query param
+    # so one Purok President can never see another purok's households
+    # just by changing the URL.
+    assigned_purok = _purok_for_username(username_param, valid_barangay)
+    effective_purok = assigned_purok or purok_filter
+
     households_qs = (
         Household.objects
         .filter(registration_complete=True)
@@ -469,8 +513,8 @@ def purok_dashboard(request):
         .order_by("-created_at")
     )
     households_qs = households_qs.filter(barangay__iexact=valid_barangay)
-    if purok_filter:
-        households_qs = households_qs.filter(purok__iexact=purok_filter)
+    if effective_purok:
+        households_qs = households_qs.filter(purok__iexact=effective_purok)
 
     households = []
     for h in households_qs:
@@ -515,7 +559,7 @@ def purok_dashboard(request):
         })
 
     data = {
-        "purok": purok_filter or "All Puroks",
+        "purok": effective_purok or "All Puroks",
         "barangay": valid_barangay,
         # TODO: replace with a real Advisory/Disaster model.
         "flood_advisory": False,
@@ -575,6 +619,16 @@ def purok_review_household(request, household_code):
             return JsonResponse({
                 "success": False,
                 "message": "This household is registered under a different barangay."
+            }, status=403)
+
+        # If this reviewer account is scoped to one specific purok (via
+        # create_purok_presidents), it can only act on households from
+        # that purok — not just anywhere in the barangay.
+        reviewer_purok = _purok_for_username(reviewer_username, reviewer_barangay)
+        if reviewer_purok and household.purok.lower() != reviewer_purok.lower():
+            return JsonResponse({
+                "success": False,
+                "message": "This household is registered under a different purok/zone."
             }, status=403)
 
         if household.status != "pending":

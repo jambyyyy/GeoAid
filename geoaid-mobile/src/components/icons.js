@@ -63,6 +63,22 @@ export function PinIcon({ size = 14, color = "#0f172a" }) {
   );
 }
 
+export function ChevronDownIcon({ size = 18, color = "#64748b" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M6 9l6 6 6-6" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function CheckIcon({ size = 18, color = "#16a34a" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M5 12.5l4.5 4.5L19 7.5" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 export function EyeIcon({ off, size = 18, color = "#64748b" }) {
   return off ? (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
