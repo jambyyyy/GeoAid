@@ -459,6 +459,170 @@ def barangay_confirm_household(request, household_code):
 
 
 @csrf_exempt
+def barangay_evacuation_dashboard(request):
+    """Evacuation center info + today's check-ins for the GeoAid Staff
+    mobile app's dashboard. Scoped to the staff account's barangay the
+    same way barangay_dashboard is (via First Name in Django admin).
+    Assumes one EvacuationCenter per barangay for now — if a barangay
+    ever has more than one, this returns the first (lowest id)."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    from django.utils import timezone
+    from .models import EvacuationCenter, Attendance
+
+    username_param = (request.GET.get("username") or "").strip()
+    valid_barangay = _barangay_for_username(username_param)
+
+    if not valid_barangay:
+        return JsonResponse({
+            "message": "Couldn't determine this account's barangay. "
+                       "Set its First Name in Django admin > Users to its barangay.",
+        }, status=403)
+
+    center = (
+        EvacuationCenter.objects
+        .filter(barangay__iexact=valid_barangay)
+        .order_by("id")
+        .first()
+    )
+    if not center:
+        return JsonResponse({
+            "message": f"No evacuation center is set up yet for {valid_barangay}.",
+        }, status=404)
+
+    today = timezone.now().date()
+    today_checkins = Attendance.objects.filter(
+        evacuation_center=center,
+        check_in_time__date=today,
+    ).count()
+
+    pending_registrations = Household.objects.filter(
+        registration_complete=True,
+        barangay__iexact=valid_barangay,
+        status="approved",  # approved by Purok President, awaiting this barangay's confirmation
+    ).count()
+
+    recent = (
+        Attendance.objects.filter(evacuation_center=center)
+        .select_related("family_member", "household")
+        .order_by("-check_in_time")[:10]
+    )
+    recent_checkins = [
+        {
+            "name": a.family_member.full_name,
+            "household": f"{a.household.full_name} Household",
+            "time": a.check_in_time.strftime("%I:%M %p") if a.check_in_time else "",
+        }
+        for a in recent
+    ]
+
+    return JsonResponse({
+        "staff_name": username_param,
+        "evacuation_center": {
+            "id": center.id,
+            "name": center.name,
+            "occupancy": center.current_occupancy,
+            "capacity": center.capacity,
+            "status": center.status,
+        },
+        "pending_registrations": pending_registrations,
+        "today_checkins": today_checkins,
+        "recent_checkins": recent_checkins,
+    })
+
+
+@csrf_exempt
+def attendance_scan(request):
+    """POST body: { "username": "<staff username>", "qr_code": "<FamilyMember.qr_code>" }
+
+    Looks up the resident by the QR token QRCodeScreen.js renders, finds
+    the scanning staff member's assigned evacuation center (same
+    barangay-scoping as barangay_dashboard), and toggles the resident
+    checked-in / checked-out. Also keeps EvacuationCenter.current_occupancy
+    in sync so the dashboard occupancy bar stays accurate."""
+
+    from django.utils import timezone
+    from .models import EvacuationCenter, Attendance
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST request required."}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        username_param = (data.get("username") or "").strip()
+        qr_code = (data.get("qr_code") or "").strip()
+
+        valid_barangay = _barangay_for_username(username_param)
+        if not valid_barangay:
+            return JsonResponse({
+                "message": "Couldn't determine your assigned barangay. Please log in again.",
+            }, status=403)
+
+        center = (
+            EvacuationCenter.objects
+            .filter(barangay__iexact=valid_barangay)
+            .order_by("id")
+            .first()
+        )
+        if not center:
+            return JsonResponse({
+                "message": f"No evacuation center is set up yet for {valid_barangay}.",
+            }, status=404)
+
+        try:
+            member = FamilyMember.objects.select_related("household").get(qr_code=qr_code)
+        except FamilyMember.DoesNotExist:
+            return JsonResponse({"message": "QR code not recognized."}, status=404)
+
+        existing = (
+            Attendance.objects.filter(
+                family_member=member,
+                evacuation_center=center,
+                attendance_status="Present",
+            )
+            .order_by("-check_in_time")
+            .first()
+        )
+
+        if existing:
+            existing.check_out_time = timezone.now()
+            existing.attendance_status = "Checked Out"
+            existing.save()
+            center.current_occupancy = max(0, center.current_occupancy - 1)
+            center.save()
+            return JsonResponse({
+                "action": "checked_out",
+                "member_name": member.full_name,
+                "household_name": f"{member.household.full_name} Household",
+                "time": existing.check_out_time.strftime("%I:%M %p"),
+            })
+
+        record = Attendance.objects.create(
+            family_member=member,
+            household=member.household,
+            evacuation_center=center,
+            check_in_time=timezone.now(),
+            attendance_status="Present",
+        )
+        center.current_occupancy += 1
+        center.save()
+
+        return JsonResponse({
+            "action": "checked_in",
+            "member_name": member.full_name,
+            "household_name": f"{member.household.full_name} Household",
+            "time": record.check_in_time.strftime("%I:%M %p"),
+        })
+
+    except Exception as e:
+        return JsonResponse({"message": str(e)}, status=500)
+
+@csrf_exempt
 def purok_dashboard(request):
     """Real household registrations for the Purok President to review.
     Previously returned hardcoded demo families — now pulls from the

@@ -151,6 +151,12 @@ function LoginScreen({ navigation, route }) {
             Not registered yet? <Text style={styles.footerLink}>Create account</Text>
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.footerRow} onPress={() => navigation.navigate("StaffLogin")}>
+          <Text style={styles.footerText}>
+            Barangay staff? <Text style={styles.footerLink}>Sign in here</Text>
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </MobileShell>
   );
