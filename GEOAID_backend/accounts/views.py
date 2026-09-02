@@ -518,6 +518,28 @@ def barangay_evacuation_dashboard(request):
         for a in recent
     ]
 
+    # Fuller list for the web dashboard's Attendance tab — same records,
+    # more fields, shaped to match dashboard.jsx's attendanceRecords
+    # (resident/household/center/checkIn/checkOut/status). "status" uses
+    # a hyphen ("checked-out") to match the status-checked-out CSS class
+    # already defined in dashboard.css.
+    all_records = (
+        Attendance.objects.filter(evacuation_center=center)
+        .select_related("family_member", "household")
+        .order_by("-check_in_time")[:50]
+    )
+    attendance_records = [
+        {
+            "resident": a.family_member.full_name,
+            "household": f"{a.household.full_name} Household",
+            "center": center.name,
+            "checkIn": a.check_in_time.strftime("%I:%M %p") if a.check_in_time else "—",
+            "checkOut": a.check_out_time.strftime("%I:%M %p") if a.check_out_time else "—",
+            "status": "present" if a.attendance_status == "Present" else "checked-out",
+        }
+        for a in all_records
+    ]
+
     return JsonResponse({
         "staff_name": username_param,
         "evacuation_center": {
@@ -530,6 +552,7 @@ def barangay_evacuation_dashboard(request):
         "pending_registrations": pending_registrations,
         "today_checkins": today_checkins,
         "recent_checkins": recent_checkins,
+        "attendance_records": attendance_records,
     })
 
 

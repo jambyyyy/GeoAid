@@ -4,6 +4,40 @@ from django.utils import timezone
 import random
 
 
+class Barangay(models.Model):
+    """New table matching the thesis ERD's barangay entity. This is
+    ADDITIVE — Household.barangay and EvacuationCenter.barangay (both
+    plain text fields) are untouched and every existing view that reads
+    them keeps working exactly as before. Household.barangay_fk and
+    EvacuationCenter.barangay_fk below are new nullable columns that
+    point here, kept in sync by a one-time backfill script rather than
+    replacing the text fields outright."""
+
+    barangay_name = models.CharField(max_length=50, unique=True)
+
+    class Meta:
+        verbose_name_plural = "Barangays"
+
+    def __str__(self):
+        return self.barangay_name
+
+
+class DisasterType(models.Model):
+    """New table matching the thesis ERD's disaster_type entity —
+    ties an Attendance record (and eventually donation/relief_distribution/
+    report) to a specific disaster event, e.g. 'Typhoon Sendong 2026'."""
+
+    STATUS_CHOICES = [("active", "Active"), ("closed", "Closed")]
+
+    disaster_type_name = models.CharField(max_length=100)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="active")
+
+    def __str__(self):
+        return self.disaster_type_name
+
+
 class Household(models.Model):
     """A resident account created through the GeoAid Resident app's
     registration flow (Steps 1-4: Account, Household, Members,
@@ -58,6 +92,13 @@ class Household(models.Model):
 
     # --- Step 2: Household Setup ---
     barangay = models.CharField(max_length=50, choices=BARANGAY_CHOICES, blank=True)
+    # New FK matching the ERD's household.barangay_id — additive, populated
+    # by a backfill script from the `barangay` text field above. Existing
+    # code (_barangay_for_username, barangay_dashboard, etc.) keeps using
+    # `barangay` (the text field); use barangay_fk for new ERD-aligned code.
+    barangay_fk = models.ForeignKey(
+        Barangay, on_delete=models.SET_NULL, null=True, blank=True, related_name="households"
+    )
     purok = models.CharField(max_length=100, blank=True)
     address_line = models.CharField(max_length=255, blank=True)
     landmark = models.CharField(max_length=255, blank=True)
@@ -149,3 +190,59 @@ class FamilyMember(models.Model):
 
     def __str__(self):
         return f"{self.full_name} ({self.relation} of {self.household.full_name})"
+
+
+class EvacuationCenter(models.Model):
+    """An evacuation center, scoped to a barangay so Barangay Staff's
+    mobile dashboard (barangay_evacuation_dashboard) can find the one
+    their account is responsible for — the same way households are
+    scoped, by matching the staff user's First Name in Django admin
+    against Household.BARANGAY_CHOICES."""
+
+    STATUS_CHOICES = [("open", "Open"), ("closed", "Closed")]
+
+    name = models.CharField(max_length=150)
+    barangay = models.CharField(max_length=50, choices=Household.BARANGAY_CHOICES)
+    # New FK matching the ERD's evacuation_center.barangay_id — additive,
+    # same backfill approach as Household.barangay_fk above.
+    barangay_fk = models.ForeignKey(
+        Barangay, on_delete=models.SET_NULL, null=True, blank=True, related_name="evacuation_centers"
+    )
+    capacity = models.PositiveIntegerField(default=0)
+    current_occupancy = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="open")
+
+    def __str__(self):
+        return f"{self.name} ({self.barangay})"
+
+
+class Attendance(models.Model):
+    """Evacuation center check-in/check-out record, created by
+    attendance_scan() each time a Barangay Staff member scans a
+    resident's QR code (FamilyMember.qr_code). Mirrors Table 3.25 of
+    the GeoAid thesis."""
+
+    STATUS_CHOICES = [("Present", "Present"), ("Checked Out", "Checked Out")]
+
+    family_member = models.ForeignKey(
+        FamilyMember, on_delete=models.CASCADE, related_name="attendance_records"
+    )
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="attendance_records"
+    )
+    evacuation_center = models.ForeignKey(
+        EvacuationCenter, on_delete=models.CASCADE, related_name="attendance_records"
+    )
+    # Matches the thesis ERD's attendance.disaster_type_id. Nullable since
+    # not every check-in will necessarily be tagged to a specific active
+    # disaster at scan time — attendance_scan() can be updated to set this
+    # once you're ready to pass it from the scanner.
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="attendance_records"
+    )
+    check_in_time = models.DateTimeField(null=True, blank=True)
+    check_out_time = models.DateTimeField(null=True, blank=True)
+    attendance_status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="Present")
+
+    def __str__(self):
+        return f"{self.family_member.full_name} @ {self.evacuation_center.name} ({self.attendance_status})"

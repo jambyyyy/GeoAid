@@ -51,12 +51,6 @@ const reliefDistribution = [
   { household: "Jomar Villareal", quantityGiven: 1, date: "Jul 13, 2026", trackingNo: "RD-1045", status: "unclaimed" },
 ];
 
-const attendanceRecords = [
-  { resident: "Maria Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
-  { resident: "Juan Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
-  { resident: "Ronaldo Sarmiento", household: "Sarmiento Household", center: "Poblacion Elementary", checkIn: "08:05 AM", checkOut: "—", status: "present" },
-];
-
 const reports = [
   { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
   { title: "Situation Report — Flood Watch, Poblacion", type: "situation", date: "Jul 12, 2026" },
@@ -239,6 +233,14 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Evacuation center + attendance (scanned residents) — separate fetch
+  // since it comes from barangay_evacuation_dashboard, not
+  // barangay_dashboard. Kept optional (evacuationError, not the main
+  // `error` state) so a missing EvacuationCenter doesn't block the rest
+  // of the dashboard from loading.
+  const [evacuationData, setEvacuationData] = useState(null);
+  const [evacuationError, setEvacuationError] = useState("");
+
   const [activeTab, setActiveTab] = useState("approved");
   const [expandedId, setExpandedId] = useState(null);
   const [toast, setToast] = useState(null);
@@ -269,6 +271,33 @@ function Dashboard() {
     };
 
     fetchDashboard();
+  }, [username]);
+
+  useEffect(() => {
+    const fetchEvacuation = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/barangay/evacuation/dashboard/?username=${encodeURIComponent(username)}`
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          // Backend returns a helpful { message } here (e.g. "No
+          // evacuation center is set up yet for X") — surface it instead
+          // of silently showing an empty table.
+          setEvacuationError(data.message || "Could not load evacuation center data.");
+          return;
+        }
+
+        setEvacuationData(data);
+        setEvacuationError("");
+      } catch (err) {
+        console.error(err);
+        setEvacuationError("Unable to connect to the server.");
+      }
+    };
+
+    fetchEvacuation();
   }, [username]);
 
   const handleLogout = () => {
@@ -539,36 +568,42 @@ function Dashboard() {
 
         {activeItem === "Attendance" && (
           <section className="panel">
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Resident</th>
-                    <th>Household</th>
-                    <th>Evacuation Center</th>
-                    <th>Check-In</th>
-                    <th>Check-Out</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attendanceRecords.map((a) => (
-                    <tr key={a.resident}>
-                      <td>{a.resident}</td>
-                      <td>{a.household}</td>
-                      <td>{a.center}</td>
-                      <td>{a.checkIn}</td>
-                      <td>{a.checkOut}</td>
-                      <td>
-                        <span className={`status-badge status-${a.status}`}>
-                          {a.status === "present" ? "Present" : "Checked Out"}
-                        </span>
-                      </td>
+            {evacuationError ? (
+              <p className="empty-state">{evacuationError}</p>
+            ) : (evacuationData?.attendance_records || []).length === 0 ? (
+              <p className="empty-state">No residents have checked in yet.</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Resident</th>
+                      <th>Household</th>
+                      <th>Evacuation Center</th>
+                      <th>Check-In</th>
+                      <th>Check-Out</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {evacuationData.attendance_records.map((a, i) => (
+                      <tr key={`${a.resident}-${a.checkIn}-${i}`}>
+                        <td>{a.resident}</td>
+                        <td>{a.household}</td>
+                        <td>{a.center}</td>
+                        <td>{a.checkIn}</td>
+                        <td>{a.checkOut}</td>
+                        <td>
+                          <span className={`status-badge status-${a.status}`}>
+                            {a.status === "present" ? "Present" : "Checked Out"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
 
