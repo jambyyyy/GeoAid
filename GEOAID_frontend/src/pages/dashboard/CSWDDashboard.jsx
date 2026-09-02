@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
+<<<<<<< HEAD
 import { API_URL } from "../../config";
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
 const navItems = [
   "Dashboard",
@@ -16,6 +19,7 @@ const navItems = [
   "Settings",
 ];
 
+<<<<<<< HEAD
 const FLAG_CLASS = {
   "PWD": "flag-pwd",
   "4Ps": "flag-4ps",
@@ -24,6 +28,8 @@ const FLAG_CLASS = {
   "Child<5": "flag-child5",
 };
 
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 const sectionInfo = {
   "Dashboard": { title: "CSWD Dashboard", subtitle: "City Social Welfare & Development — Relief & Beneficiary Operations" },
   "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed across barangays" },
@@ -65,7 +71,11 @@ function CSWDDashboard() {
     const fetchDashboard = async () => {
       try {
         const response = await fetch(
+<<<<<<< HEAD
           `${API_URL}/api/cswd/dashboard/`
+=======
+          "http://127.0.0.1:8000/api/cswd/dashboard/"
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
         );
 
         const data = await response.json();
@@ -271,6 +281,7 @@ function CSWDDashboard() {
 
         {activeItem === "Households" && (
           <section className="panel">
+<<<<<<< HEAD
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -309,6 +320,13 @@ function CSWDDashboard() {
                 </tbody>
               </table>
             </div>
+=======
+            <p className="panel-note">
+              {dashboardData?.total_households ?? 0} households are currently registered under CSWD monitoring.
+              A detailed household registry view is coming soon — for now, check Priority Beneficiaries and
+              Vulnerability Profiles for at-risk households.
+            </p>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
           </section>
         )}
 

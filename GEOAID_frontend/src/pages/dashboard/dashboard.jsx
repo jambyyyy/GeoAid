@@ -1,8 +1,15 @@
+<<<<<<< HEAD
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./dashboard.css";
 import Sidebar from "../../components/sidebar";
 import { API_URL } from "../../config";
+=======
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import "./dashboard.css";
+import Sidebar from "../../components/sidebar";
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
 const navItems = [
   "Dashboard",
@@ -13,6 +20,7 @@ const navItems = [
   "Reports",
 ];
 
+<<<<<<< HEAD
 const sectionInfo = (barangay) => ({
   "Dashboard": { title: "Barangay Staff Dashboard", subtitle: `Evacuation & Relief Operations${barangay ? ` — Brgy. ${barangay}` : ""}` },
   "Household Registration": { title: "Household Registration", subtitle: `Give final confirmation to households already approved by your Purok Presidents${barangay ? ` in Brgy. ${barangay}` : ""}` },
@@ -37,6 +45,35 @@ const STATUS_LABEL = {
 };
 
 // --- Static placeholders (no backing model yet) ---
+=======
+// --- Dashboard overview data ---
+const stats = [
+  { label: "Pending Registrations", value: "9", tone: "danger" },
+  { label: "Center Occupancy", value: "142/300", tone: "warning" },
+  { label: "Checked-In Households", value: "58", tone: "info" },
+  { label: "Relief Claims Processed", value: "31", tone: "success" },
+];
+
+const recentActivity = [
+  { time: "10:32 AM", event: "Household #0231 (Purok 4) registration confirmed and forwarded to CSWD", type: "report" },
+  { time: "09:50 AM", event: "QR code scanned — Familia Dela Cruz checked in at Poblacion Elementary Evac. Center", type: "update" },
+  { time: "09:15 AM", event: "Evacuation center occupancy updated: 142/300 at Poblacion Elementary", type: "dispatch" },
+  { time: "08:40 AM", event: "3 pending household registrations awaiting Purok President verification", type: "alert" },
+  { time: "07:55 AM", event: "Relief goods disbursement recorded for 12 households — Tracking No. RD-1042", type: "report" },
+];
+
+// --- Household table (matches household + confirmation_status from the Data Dictionary) ---
+const households = [
+  { id: "HH-0231", representative: "Maria Dela Cruz", purok: "Purok 4", registrationYear: 2026, status: "confirmed" },
+  { id: "HH-0232", representative: "Ronaldo Sarmiento", purok: "Purok 2", registrationYear: 2026, status: "pending" },
+  { id: "HH-0233", representative: "Elena Bautista", purok: "Purok 7", registrationYear: 2026, status: "confirmed" },
+  { id: "HH-0234", representative: "Jomar Villareal", purok: "Purok 1", registrationYear: 2026, status: "pending" },
+  { id: "HH-0235", representative: "Corazon Ibanez", purok: "Purok 3", registrationYear: 2026, status: "rejected" },
+  { id: "HH-0236", representative: "Danilo Fernandez", purok: "Purok 5", registrationYear: 2026, status: "pending" },
+];
+
+// --- Evacuation centers (matches evacuation_center table) ---
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 const evacuationCenters = [
   { name: "Poblacion Elementary School", address: "Brgy. Poblacion", capacity: 300, occupancy: 142, status: "open" },
   { name: "Brgy. Hinaplanon Covered Court", address: "Brgy. Hinaplanon", capacity: 150, occupancy: 150, status: "full" },
@@ -44,6 +81,10 @@ const evacuationCenters = [
   { name: "Tibanga National High School", address: "Brgy. Tibanga", capacity: 200, occupancy: 0, status: "closed" },
 ];
 
+<<<<<<< HEAD
+=======
+// --- Relief distribution (matches relief_distribution table) ---
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 const reliefDistribution = [
   { household: "Maria Dela Cruz", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1042", status: "claimed" },
   { household: "Elena Bautista", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1043", status: "claimed" },
@@ -51,10 +92,25 @@ const reliefDistribution = [
   { household: "Jomar Villareal", quantityGiven: 1, date: "Jul 13, 2026", trackingNo: "RD-1045", status: "unclaimed" },
 ];
 
+<<<<<<< HEAD
+=======
+// --- Attendance (matches attendance table — one row per resident QR check-in) ---
+const attendanceRecords = [
+  { resident: "Maria Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
+  { resident: "Juan Dela Cruz", household: "Dela Cruz Household", center: "Poblacion Elementary", checkIn: "07:42 AM", checkOut: "—", status: "present" },
+  { resident: "Ronaldo Sarmiento", household: "Sarmiento Household", center: "Poblacion Elementary", checkIn: "08:05 AM", checkOut: "—", status: "present" },
+  { resident: "Liza Sarmiento", household: "Sarmiento Household", center: "Poblacion Elementary", checkIn: "08:05 AM", checkOut: "—", status: "present" },
+  { resident: "Elena Bautista", household: "Bautista Household", center: "Brgy. Hinaplanon Covered Court", checkIn: "06:58 AM", checkOut: "11:20 AM", status: "checked-out" },
+  { resident: "Corazon Ibanez", household: "Ibanez Household", center: "Brgy. Hinaplanon Covered Court", checkIn: "07:15 AM", checkOut: "—", status: "present" },
+];
+
+// --- Reports (matches report table — report_type enum) ---
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 const reports = [
   { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
   { title: "Situation Report — Flood Watch, Poblacion", type: "situation", date: "Jul 12, 2026" },
   { title: "Disaster Monitoring Summary — Week 28", type: "disaster_monitoring", date: "Jul 11, 2026" },
+<<<<<<< HEAD
 ];
 
 function CheckIcon() {
@@ -223,11 +279,17 @@ function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
   );
 }
 
+=======
+  { title: "Situation Report — Evacuation Center Occupancy", type: "situation", date: "Jul 10, 2026" },
+];
+
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 function Dashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "Barangay Staff";
   const [activeItem, setActiveItem] = useState("Dashboard");
 
+<<<<<<< HEAD
   const [dashboardData, setDashboardData] = useState(null);
   const [households, setHouseholds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -398,6 +460,23 @@ function Dashboard() {
   };
 
   const visibleHouseholds = households.filter((h) => h.status === activeTab);
+=======
+  const handleLogout = () => {
+    sessionStorage.removeItem("geoaid_user");
+    navigate("/");
+  };
+
+  const sectionInfo = {
+    "Dashboard": { title: "Barangay Staff Dashboard", subtitle: "Barangay Poblacion — Evacuation & Relief Operations" },
+    "Household Registration": { title: "Household Registration", subtitle: "Verify and confirm household records submitted by residents" },
+    "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy and status across barangay evacuation sites" },
+    "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed to registered households" },
+    "Attendance": { title: "Evacuation Center Attendance", subtitle: "Resident check-ins confirmed via QR code scan" },
+    "Reports": { title: "Reports", subtitle: "Situation, disaster monitoring, and relief & vulnerability reports" },
+  };
+
+  const { title, subtitle } = sectionInfo[activeItem];
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
   return (
     <div className="dashboard-page">
@@ -425,6 +504,7 @@ function Dashboard() {
         {activeItem === "Dashboard" && (
           <>
             <section className="stats-grid">
+<<<<<<< HEAD
               <article className="stat-card stat-warning">
                 <span className="stat-value">{counts.approved}</span>
                 <span className="stat-label">Pending Your Confirmation</span>
@@ -441,10 +521,19 @@ function Dashboard() {
                 <span className="stat-value">{dashboardData?.unregistered_households ?? 0}</span>
                 <span className="stat-label">Unregistered in {barangay || "Barangay"}</span>
               </article>
+=======
+              {stats.map((stat) => (
+                <article key={stat.label} className={`stat-card stat-${stat.tone}`}>
+                  <span className="stat-value">{stat.value}</span>
+                  <span className="stat-label">{stat.label}</span>
+                </article>
+              ))}
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
             </section>
 
             <section className="content-grid">
               <article className="panel">
+<<<<<<< HEAD
                 <h2>Your role</h2>
                 <p className="panel-note">
                   Give final confirmation to household registrations already reviewed and approved by their Purok
@@ -456,6 +545,20 @@ function Dashboard() {
                     {counts.approved} household{counts.approved === 1 ? "" : "s"} awaiting your confirmation right now.
                   </p>
                 )}
+=======
+                <h2>Recent Activity</h2>
+                <ul className="activity-list">
+                  {recentActivity.map((item) => (
+                    <li key={item.time + item.event}>
+                      <span className="activity-time">{item.time}</span>
+                      <div>
+                        <p>{item.event}</p>
+                        <span className={`activity-type type-${item.type}`}>{item.type}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
               </article>
 
               <article className="panel">
@@ -475,6 +578,7 @@ function Dashboard() {
 
         {activeItem === "Household Registration" && (
           <section className="panel">
+<<<<<<< HEAD
             <div className="subtabs">
               {["approved", "confirmed", "rejected"].map((tab) => (
                 <button
@@ -502,6 +606,31 @@ function Dashboard() {
                   onReject={requestReject}
                 />
               ))}
+=======
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Household ID</th>
+                    <th>Representative</th>
+                    <th>Purok</th>
+                    <th>Registration Year</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {households.map((h) => (
+                    <tr key={h.id}>
+                      <td>{h.id}</td>
+                      <td>{h.representative}</td>
+                      <td>{h.purok}</td>
+                      <td>{h.registrationYear}</td>
+                      <td><span className={`status-badge status-${h.status}`}>{h.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
             </div>
           </section>
         )}
@@ -532,7 +661,10 @@ function Dashboard() {
                 </tbody>
               </table>
             </div>
+<<<<<<< HEAD
             <p className="panel-note">Evacuation center data isn't backed by a real model yet — shown for layout only.</p>
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
           </section>
         )}
 
@@ -562,12 +694,16 @@ function Dashboard() {
                 </tbody>
               </table>
             </div>
+<<<<<<< HEAD
             <p className="panel-note">Relief distribution data isn't backed by a real model yet — shown for layout only.</p>
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
           </section>
         )}
 
         {activeItem === "Attendance" && (
           <section className="panel">
+<<<<<<< HEAD
             {evacuationError ? (
               <p className="empty-state">{evacuationError}</p>
             ) : (evacuationData?.attendance_records || []).length === 0 ? (
@@ -604,6 +740,38 @@ function Dashboard() {
                 </table>
               </div>
             )}
+=======
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Resident</th>
+                    <th>Household</th>
+                    <th>Evacuation Center</th>
+                    <th>Check-In</th>
+                    <th>Check-Out</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceRecords.map((a) => (
+                    <tr key={a.resident}>
+                      <td>{a.resident}</td>
+                      <td>{a.household}</td>
+                      <td>{a.center}</td>
+                      <td>{a.checkIn}</td>
+                      <td>{a.checkOut}</td>
+                      <td>
+                        <span className={`status-badge status-${a.status}`}>
+                          {a.status === "present" ? "Present" : "Checked Out"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
           </section>
         )}
 
@@ -625,6 +793,7 @@ function Dashboard() {
           </section>
         )}
       </div>
+<<<<<<< HEAD
 
       {toast && <div className="toast">{toast}</div>}
       <ConfirmModal
@@ -633,6 +802,8 @@ function Dashboard() {
         onCancel={cancelPendingAction}
         isSubmitting={isReviewing}
       />
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
     </div>
   );
 }

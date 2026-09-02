@@ -179,6 +179,7 @@
     background: #dbeafe;
 }
 
+<<<<<<< HEAD
 /* --- Household registration review (real data from Purok President) --- */
 
 .subtabs {
@@ -567,6 +568,8 @@
     color: #64748b;
 }
 
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 .table-scroll {
     overflow-x: auto;
 }
@@ -667,10 +670,13 @@
     .content-grid {
         grid-template-columns: 1fr;
     }
+<<<<<<< HEAD
 
     .household-body {
         grid-template-columns: 1fr;
     }
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 }
 
 @media (max-width: 768px) {
@@ -689,6 +695,7 @@
     .stats-grid {
         grid-template-columns: 1fr;
     }
+<<<<<<< HEAD
 
     .household-actions {
         width: 100%;
@@ -700,4 +707,6 @@
         flex: 1;
         justify-content: center;
     }
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 }

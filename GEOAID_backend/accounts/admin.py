@@ -1,4 +1,5 @@
 from django.contrib import admin
+<<<<<<< HEAD
 from .models import (
     Household,
     FamilyMember,
@@ -56,3 +57,7 @@ class DisasterTypeAdmin(admin.ModelAdmin):
     list_display = ("disaster_type_name", "start_date", "end_date", "status")
     list_filter = ("status",)
     search_fields = ("disaster_type_name",)
+=======
+
+# Register your models here.
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca

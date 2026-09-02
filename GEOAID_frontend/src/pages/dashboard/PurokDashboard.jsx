@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./PurokDashboard.css";
 import Sidebar from "../../components/sidebar";
+<<<<<<< HEAD
 import { API_URL } from "../../config";
 
 const navItems = ["Dashboard", "Household Registration", "Reports", "Settings"];
@@ -12,6 +13,17 @@ const sectionInfo = (barangay) => ({
   "Reports": { title: "Reports", subtitle: `Registration activity for ${barangay ? `Brgy. ${barangay}` : "your Purok"}` },
   "Settings": { title: "Settings", subtitle: "Manage your Purok President account preferences" },
 });
+=======
+
+const navItems = ["Dashboard", "Household Registration", "Reports", "Settings"];
+
+const sectionInfo = {
+  "Dashboard": { title: "Purok President Dashboard", subtitle: "Overview of household registrations awaiting your review" },
+  "Household Registration": { title: "Household Registration Review", subtitle: "Verify household submissions, then approve to forward to Barangay Staff" },
+  "Reports": { title: "Reports", subtitle: "Registration activity for your Purok" },
+  "Settings": { title: "Settings", subtitle: "Manage your Purok President account preferences" },
+};
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
 const FLAG_CLASS = {
   "PWD": "flag-pwd",
@@ -148,6 +160,7 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
               </div>
               <div className="details-row">
                 <dt>GPS coordinates</dt>
+<<<<<<< HEAD
                 <dd>
                   {household.gps_lat != null && household.gps_lng != null
                     ? `${household.gps_lat.toFixed(4)}°N, ${household.gps_lng.toFixed(4)}°E`
@@ -161,6 +174,17 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
               <div className="details-row">
                 <dt>Barangay</dt>
                 <dd>{household.barangay}</dd>
+=======
+                <dd>{household.gps_lat.toFixed(4)}°N, {household.gps_lng.toFixed(4)}°E</dd>
+              </div>
+              <div className="details-row">
+                <dt>Purok</dt>
+                <dd>Purok 3</dd>
+              </div>
+              <div className="details-row">
+                <dt>Barangay</dt>
+                <dd>Tibanga, Iligan City</dd>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
               </div>
               <div className="details-row">
                 <dt>Total members</dt>
@@ -172,6 +196,7 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
               </div>
             </dl>
 
+<<<<<<< HEAD
             {household.gps_lat != null && household.gps_lng != null && (
               <div className="mini-map">
                 <div className="mini-map-pin" />
@@ -180,6 +205,14 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
                 </span>
               </div>
             )}
+=======
+            <div className="mini-map">
+              <div className="mini-map-pin" />
+              <span className="mini-map-coord">
+                <MapPinIcon /> {household.gps_lat.toFixed(4)}°N, {household.gps_lng.toFixed(4)}°E
+              </span>
+            </div>
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
           </div>
         </div>
       )}
@@ -187,6 +220,7 @@ function HouseholdCard({ household, expanded, onToggle, onApprove, onReject }) {
   );
 }
 
+<<<<<<< HEAD
 function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
   if (!action) return null;
 
@@ -219,6 +253,8 @@ function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
   );
 }
 
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 function PurokDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "Purok President";
@@ -232,6 +268,7 @@ function PurokDashboard() {
   const [activeTab, setActiveTab] = useState("pending");
   const [expandedId, setExpandedId] = useState(null);
   const [toast, setToast] = useState(null);
+<<<<<<< HEAD
   const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
   const [isReviewing, setIsReviewing] = useState(false);
 
@@ -239,12 +276,18 @@ function PurokDashboard() {
   // (Django admin > Users > First Name), so no extra login-page changes
   // are needed for this to be scoped correctly.
   const barangay = dashboardData?.barangay || "";
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
         const response = await fetch(
+<<<<<<< HEAD
           `${API_URL}/api/purok/dashboard/?username=${encodeURIComponent(username)}`
+=======
+          "http://127.0.0.1:8000/api/purok/dashboard/"
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
         );
 
         const data = await response.json();
@@ -260,7 +303,11 @@ function PurokDashboard() {
     };
 
     fetchDashboard();
+<<<<<<< HEAD
   }, [username]);
+=======
+  }, []);
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
@@ -273,6 +320,7 @@ function PurokDashboard() {
     window.setTimeout(() => setToast(null), 3200);
   };
 
+<<<<<<< HEAD
   // Approve/Reject require confirmation first (see ConfirmModal below),
   // then persist via POST /api/purok/households/<id>/review/ so the
   // decision survives a page refresh instead of only living in state.
@@ -328,13 +376,37 @@ function PurokDashboard() {
       setIsReviewing(false);
       setPendingAction(null);
     }
+=======
+  // NOTE: Approve/Reject only update local state for now — there is no
+  // backend endpoint yet to persist a household's review decision.
+  // Once one exists, replace this with a POST to something like
+  // /api/purok/households/<id>/review/ and refresh from the response.
+  const updateStatus = (id, status, message) => {
+    setHouseholds((prev) => prev.map((h) => (h.id === id ? { ...h, status } : h)));
+    setExpandedId(null);
+    showToast(message);
+  };
+
+  const handleApprove = (id) => {
+    const h = households.find((x) => x.id === id);
+    updateStatus(id, "approved", `${h.family_name} Family approved and forwarded to Barangay Staff`);
+  };
+
+  const handleReject = (id) => {
+    const h = households.find((x) => x.id === id);
+    updateStatus(id, "rejected", `${h.family_name} Family flagged for info issues`);
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
   };
 
   const toggleExpand = (id) => {
     setExpandedId((current) => (current === id ? null : id));
   };
 
+<<<<<<< HEAD
   const { title, subtitle } = sectionInfo(barangay)[activeItem];
+=======
+  const { title, subtitle } = sectionInfo[activeItem];
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 
   if (loading) {
     return (
@@ -469,8 +541,13 @@ function PurokDashboard() {
                   household={h}
                   expanded={expandedId === h.id}
                   onToggle={toggleExpand}
+<<<<<<< HEAD
                   onApprove={requestApprove}
                   onReject={requestReject}
+=======
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
                 />
               ))}
             </div>
@@ -496,14 +573,21 @@ function PurokDashboard() {
       </div>
 
       {toast && <div className="toast">{toast}</div>}
+<<<<<<< HEAD
       <ConfirmModal
         action={pendingAction}
         onConfirm={confirmPendingAction}
         onCancel={cancelPendingAction}
         isSubmitting={isReviewing}
       />
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
     </div>
   );
 }
 
+<<<<<<< HEAD
 export default PurokDashboard;
+=======
+export default PurokDashboard;
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca

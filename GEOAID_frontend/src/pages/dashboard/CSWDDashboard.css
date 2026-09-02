@@ -157,6 +157,7 @@
     color: #2563eb;
 }
 
+<<<<<<< HEAD
 .flag-badge {
     padding: 2px 10px;
     border-radius: 999px;
@@ -172,6 +173,8 @@
 .flag-elderly { background: #e0e7ff; color: #4338ca; }
 .flag-child5 { background: #d1fae5; color: #047857; }
 
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 .activity-time {
     font-size: 12px;
     font-weight: 600;

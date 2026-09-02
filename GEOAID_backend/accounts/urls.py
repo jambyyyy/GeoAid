@@ -1,4 +1,5 @@
 from django.urls import path
+<<<<<<< HEAD
 from .views import (
     login_user,
     cswd_dashboard,
@@ -33,4 +34,12 @@ urlpatterns = [
     path("resident/register/complete/", register_complete),
     path("resident/login/", login_resident),
     path("resident/dashboard/", resident_dashboard),
+=======
+from .views import login_user, cswd_dashboard, purok_dashboard
+
+urlpatterns = [
+    path('login/', login_user, name='login'),
+     path("cswd/dashboard/", cswd_dashboard),
+     path("purok/dashboard/", purok_dashboard),
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
 ]

@@ -10,7 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+<<<<<<< HEAD
     "expo": "^57.0.11",
+=======
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1"

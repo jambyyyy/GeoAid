@@ -1,4 +1,5 @@
 from django.db import models
+<<<<<<< HEAD
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
 import random
@@ -246,3 +247,7 @@ class Attendance(models.Model):
 
     def __str__(self):
         return f"{self.family_member.full_name} @ {self.evacuation_center.name} ({self.attendance_status})"
+=======
+
+# Create your models here.
+>>>>>>> f89e8864a69568ed78c4e55d7e132ab5a9c271ca
