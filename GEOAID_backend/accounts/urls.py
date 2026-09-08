@@ -1,0 +1,46 @@
+from django.urls import path
+from .views import (
+    login_user,
+    cswd_dashboard,
+    drrm_dashboard,
+    barangay_dashboard,
+    barangay_confirm_household,
+    barangay_evacuation_dashboard,
+    attendance_scan,
+    purok_dashboard,
+    purok_reports,
+    purok_review_household,
+    register_resident,
+    register_complete,
+    register_lookups,
+    login_resident,
+    resident_dashboard,
+    mark_resident_alerts_read,
+    cswd_relief,
+    cswd_reports,
+    barangay_relief,
+)
+
+urlpatterns = [
+    path('login/', login_user, name='login'),
+    path("cswd/dashboard/", cswd_dashboard),
+    path("cswd/relief/", cswd_relief),
+    path("cswd/reports/", cswd_reports),
+    path("barangay/relief/", barangay_relief),
+    path("drrm/dashboard/", drrm_dashboard),
+    path("barangay/dashboard/", barangay_dashboard),
+    path("barangay/households/<str:household_code>/confirm/", barangay_confirm_household),
+    path("barangay/evacuation/dashboard/", barangay_evacuation_dashboard),
+    path("barangay/attendance/scan/", attendance_scan),
+    path("purok/dashboard/", purok_dashboard),
+    path("purok/reports/", purok_reports),
+    path("purok/households/<str:household_code>/review/", purok_review_household),
+
+    # Resident app (GEOAID_resident)
+    path("resident/register/", register_resident),
+    path("resident/register/lookups/", register_lookups),
+    path("resident/register/complete/", register_complete),
+    path("resident/login/", login_resident),
+    path("resident/dashboard/", resident_dashboard),
+    path("resident/alerts/read/", mark_resident_alerts_read),
+]

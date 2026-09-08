@@ -1,0 +1,28 @@
+.mobile-shell-outer {
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    background: #e2e6ee;
+}
+
+.mobile-shell {
+    width: 100%;
+    max-width: 430px;
+    min-height: 100vh;
+    background: var(--page-bg);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    box-shadow: 0 0 40px rgba(15, 23, 42, 0.12);
+}
+
+.mobile-shell.tone-navy {
+    background: var(--navy);
+}
+
+@media (min-width: 431px) {
+    .mobile-shell-outer {
+        padding: 24px 0;
+    }
+}

@@ -1,0 +1,128 @@
+.account-step {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.account-step label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 7px;
+    margin-top: 16px;
+}
+
+.account-step label:first-of-type {
+    margin-top: 0;
+}
+
+.account-step input[type="text"],
+.account-step input[type="password"],
+.account-step input[type="tel"] {
+    width: 100%;
+    padding: 13px 14px;
+    border-radius: 10px;
+    border: 1px solid #d1d5db;
+    background: #f8fafc;
+    font-size: 14px;
+    outline: none;
+    transition: 0.2s;
+}
+
+.account-step input:focus {
+    border-color: var(--brand-blue);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.account-step input::placeholder {
+    color: #9aa3b2;
+}
+
+.mobile-input-wrap {
+    display: flex;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #f8fafc;
+}
+
+.mobile-prefix {
+    padding: 13px 12px;
+    background: #eef1f5;
+    color: var(--ink-muted);
+    font-size: 14px;
+    font-weight: 600;
+    border-right: 1px solid #d1d5db;
+}
+
+.mobile-input-wrap input {
+    flex: 1;
+    border: none !important;
+    background: transparent !important;
+    min-width: 0;
+}
+
+.mobile-input-wrap:focus-within {
+    border-color: var(--brand-blue);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.privacy-note {
+    margin-top: 22px;
+    display: flex;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 12px;
+    background: #eff6ff;
+    color: var(--brand-blue-dark);
+}
+
+.privacy-note svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.privacy-note p {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #3b5680;
+}
+
+.form-error {
+    margin-bottom: 6px;
+    padding: 11px 13px;
+    border-radius: 10px;
+    background: var(--accent-danger-soft);
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.continue-btn {
+    margin-top: auto;
+    padding-top: 15px;
+    padding-bottom: 15px;
+    border: none;
+    border-radius: 12px;
+    background: var(--navy);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: 0.2s;
+    margin-top: 28px;
+}
+
+.continue-btn:hover {
+    background: var(--navy-soft);
+}
+
+.continue-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}

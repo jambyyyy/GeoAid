@@ -1,0 +1,30 @@
+.bottom-nav {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 6px calc(env(safe-area-inset-bottom, 0px) + 8px);
+}
+
+.bottom-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 0;
+    border: none;
+    background: none;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 10px;
+    transition: 0.2s;
+}
+
+.bottom-nav-item.active {
+    color: var(--brand-blue);
+    background: #eff6ff;
+}
