@@ -1,52 +1,91 @@
-import { useState, useEffect, useRef } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import React, { useState, useEffect, useRef } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+} from "react-native";
+import {
+  CameraView,
+  useCameraPermissions,
+} from "expo-camera";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import { BackIcon } from "../src/components/icons";
 import { API_BASE } from "../src/api";
 
-// Uses expo-camera's built-in barcode scanning (CameraView + onBarcodeScanned)
-// rather than the older expo-barcode-scanner package, which is deprecated.
-function ScannerScreen({ navigation }) {
+export default function ScannerScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions();
-  const [status, setStatus] = useState("idle"); // idle | checking | success | error
+  const [status, setStatus] = useState("idle");
   const [result, setResult] = useState(null);
-  const lockRef = useRef(false); // prevents double-firing while one scan is in flight
+
+  // Running count of people currently checked in today.
+  // +1 on check_in, -1 on check_out.
+  const [checkInsToday, setCheckInsToday] = useState(0);
+
+  const lockRef = useRef(false);
 
   useEffect(() => {
     if (!permission) return;
-    if (!permission.granted) requestPermission();
+
+    if (!permission.granted) {
+      requestPermission();
+    }
   }, [permission]);
 
-  const handleScan = async ({ data: qrValue }) => {
+  const handleScan = async ({ data }) => {
     if (lockRef.current) return;
+
     lockRef.current = true;
     setStatus("checking");
     setResult(null);
 
-    const username = (await AsyncStorage.getItem("geoaid_staff_username")) || "";
-
     try {
-      const response = await fetch(`${API_BASE}/api/barangay/attendance/scan/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, qr_code: qrValue }),
-      });
-      const data = await response.json().catch(() => ({}));
+      const username =
+        (await AsyncStorage.getItem("geoaid_staff_username")) || "";
+
+      const response = await fetch(
+        `${API_BASE}/api/barangay/attendance/scan/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username,
+            qr_code: data,
+          }),
+        }
+      );
+
+      const responseData = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         setStatus("error");
-        setResult({ message: data.message || "QR code not recognized." });
+        setResult({
+          message:
+            responseData.message || "QR code not recognized.",
+        });
         return;
       }
 
-      // { action: "checked_in" | "checked_out", member_name, household_name, time }
       setStatus("success");
-      setResult(data);
-    } catch (err) {
-      console.error(err);
+      setResult(responseData);
+
+      // Update the running check-in counter based on the action returned.
+      if (responseData.action === "checked_in") {
+        setCheckInsToday((count) => count + 1);
+      } else if (responseData.action === "checked_out") {
+        setCheckInsToday((count) => Math.max(0, count - 1));
+      }
+    } catch (error) {
+      console.error("SCAN ERROR:", error);
+
       setStatus("error");
-      setResult({ message: "Unable to reach the server." });
+      setResult({
+        message: "Unable to reach the server.",
+      });
     }
   };
 
@@ -59,7 +98,11 @@ function ScannerScreen({ navigation }) {
   if (!permission) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator />
+        <ActivityIndicator size="large" />
+
+        <Text style={styles.loadingText}>
+          Checking camera permission...
+        </Text>
       </View>
     );
   }
@@ -67,64 +110,249 @@ function ScannerScreen({ navigation }) {
   if (!permission.granted) {
     return (
       <View style={styles.center}>
-        <Text style={styles.permissionText}>Camera access is needed to scan QR codes.</Text>
-        <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
-          <Text style={styles.permissionBtnText}>Grant Camera Access</Text>
+        <Text style={styles.permissionTitle}>
+          Camera Permission Required
+        </Text>
+
+        <Text style={styles.permissionText}>
+          GeoAid needs camera access to scan resident QR codes.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.permissionButton}
+          onPress={requestPermission}
+        >
+          <Text style={styles.permissionButtonText}>
+            Allow Camera
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.goBackButton}
+        >
+          <Text style={styles.goBackText}>
+            Go Back
+          </Text>
         </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={styles.container}>
       <CameraView
-        style={StyleSheet.absoluteFillObject}
+        style={styles.camera}
         facing="back"
-        barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-        onBarcodeScanned={status === "idle" ? handleScan : undefined}
+        active={true}
+        barcodeScannerSettings={{
+          barcodeTypes: ["qr"],
+        }}
+        onBarcodeScanned={
+          status === "idle" ? handleScan : undefined
+        }
+        onMountError={(error) => {
+          console.log("CAMERA MOUNT ERROR:", error);
+        }}
       />
 
-      <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} accessibilityLabel="Back">
-        <BackIcon />
-      </TouchableOpacity>
+      <View style={styles.topBar}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <BackIcon size={24} color="#ffffff" />
+        </TouchableOpacity>
 
-      <View style={styles.frameWrap} pointerEvents="none">
-        <View style={styles.frame} />
-        {status === "idle" && <Text style={styles.hint}>Point the camera at a resident's QR code</Text>}
+        <Text style={styles.title}>
+          Scan QR Code
+        </Text>
+
+        <View style={styles.countBadge}>
+          <Text style={styles.countBadgeText}>
+            {checkInsToday}
+          </Text>
+        </View>
       </View>
 
-      {status !== "idle" && (
-        <View style={styles.resultCard}>
-          {status === "checking" && (
-            <>
-              <ActivityIndicator size="small" color="#2563eb" />
-              <Text style={styles.resultText}>Checking QR code…</Text>
-            </>
-          )}
+      {status === "idle" && (
+        <View style={styles.scanContainer}>
+          <View style={styles.scanBox}>
+            <View
+              style={[
+                styles.corner,
+                styles.topLeft,
+              ]}
+            />
 
-          {status === "success" && (
-            <>
-              <Text style={styles.resultTitleSuccess}>
-                {result?.action === "checked_out" ? "Checked Out" : "Checked In"}
+            <View
+              style={[
+                styles.corner,
+                styles.topRight,
+              ]}
+            />
+
+            <View
+              style={[
+                styles.corner,
+                styles.bottomLeft,
+              ]}
+            />
+
+            <View
+              style={[
+                styles.corner,
+                styles.bottomRight,
+              ]}
+            />
+          </View>
+
+          <Text style={styles.instruction}>
+            Place the QR code inside the frame
+          </Text>
+        </View>
+      )}
+
+      {status === "checking" && (
+        <View style={styles.messageBox}>
+          <ActivityIndicator
+            size="large"
+            color="#ffffff"
+          />
+
+          <Text style={styles.messageTitle}>
+            Checking attendance...
+          </Text>
+        </View>
+      )}
+
+      {status === "success" &&
+        result?.action === "checked_in" && (
+          <View style={styles.messageBox}>
+            <Text style={styles.successTitle}>
+              ✓ Checked In
+            </Text>
+
+            <Text style={styles.messageText}>
+              {result.member_name}
+            </Text>
+
+            <Text style={styles.messageText}>
+              {result.household_name}
+            </Text>
+
+            <Text style={styles.timeText}>
+              {result.time}
+            </Text>
+
+            <Text style={styles.countText}>
+              Checked in today: {checkInsToday}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.scanAgainButton}
+              onPress={scanAgain}
+            >
+              <Text style={styles.scanAgainText}>
+                Scan Again
               </Text>
-              <Text style={styles.resultName}>{result?.member_name}</Text>
-              <Text style={styles.resultMeta}>{result?.household_name}</Text>
-              {result?.time && <Text style={styles.resultMeta}>{result.time}</Text>}
-              <TouchableOpacity style={styles.scanAgainBtn} onPress={scanAgain}>
-                <Text style={styles.scanAgainText}>Scan Next</Text>
-              </TouchableOpacity>
-            </>
-          )}
+            </TouchableOpacity>
+          </View>
+        )}
 
-          {status === "error" && (
-            <>
-              <Text style={styles.resultTitleError}>Not Recognized</Text>
-              <Text style={styles.resultMeta}>{result?.message}</Text>
-              <TouchableOpacity style={styles.scanAgainBtn} onPress={scanAgain}>
-                <Text style={styles.scanAgainText}>Try Again</Text>
-              </TouchableOpacity>
-            </>
-          )}
+      {status === "success" &&
+        result?.action === "checked_out" && (
+          <View style={styles.messageBox}>
+            <Text style={styles.checkoutTitle}>
+              ✓ Checked Out
+            </Text>
+
+            <Text style={styles.messageText}>
+              {result.member_name}
+            </Text>
+
+            <Text style={styles.messageText}>
+              {result.household_name}
+            </Text>
+
+            <Text style={styles.timeText}>
+              {result.time}
+            </Text>
+
+            <Text style={styles.countText}>
+              Checked in today: {checkInsToday}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.scanAgainButton}
+              onPress={scanAgain}
+            >
+              <Text style={styles.scanAgainText}>
+                Scan Again
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+      {status === "success" &&
+        !result?.action && (
+          <View style={styles.messageBox}>
+            <Text style={styles.successTitle}>
+              ✓ Attendance Recorded
+            </Text>
+
+            {result?.message && (
+              <Text style={styles.messageText}>
+                {result.message}
+              </Text>
+            )}
+
+            <TouchableOpacity
+              style={styles.scanAgainButton}
+              onPress={scanAgain}
+            >
+              <Text style={styles.scanAgainText}>
+                Scan Again
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+      {status === "error" && (
+        <View style={styles.messageBox}>
+          <Text style={styles.errorTitle}>
+            ✕ Scan Failed
+          </Text>
+
+          <Text style={styles.messageText}>
+            {result?.message || "QR code not recognized."}
+          </Text>
+
+          <TouchableOpacity
+            style={styles.scanAgainButton}
+            onPress={scanAgain}
+          >
+            <Text style={styles.scanAgainText}>
+              Try Again
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {status === "idle" && (
+        <View style={styles.bottomInfo}>
+          <Text style={styles.bottomTitle}>
+            Scan Resident QR Code
+          </Text>
+
+          <Text style={styles.bottomText}>
+            Scan once to check in. Scan the same QR code
+            again to check out.
+          </Text>
+
+          <Text style={styles.bottomCountText}>
+            Checked in today: {checkInsToday}
+          </Text>
         </View>
       )}
     </View>
@@ -132,40 +360,273 @@ function ScannerScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#000" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
-  permissionText: { fontSize: 14, color: "#374151", textAlign: "center" },
-  permissionBtn: { backgroundColor: "#2563eb", borderRadius: 10, paddingVertical: 12, paddingHorizontal: 20 },
-  permissionBtnText: { color: "#fff", fontWeight: "700" },
-  backBtn: {
-    position: "absolute",
-    top: 50,
-    left: 20,
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.9)",
+  container: {
+    flex: 1,
+    backgroundColor: "black",
   },
-  frameWrap: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16 },
-  frame: { width: 240, height: 240, borderRadius: 20, borderWidth: 3, borderColor: "#fff" },
-  hint: { color: "#fff", fontSize: 13, backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  resultCard: {
+
+  camera: {
+    flex: 1,
+  },
+
+  topBar: {
     position: "absolute",
-    bottom: 40,
+    top: 45,
+    left: 0,
+    right: 0,
+    height: 55,
+    paddingHorizontal: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    zIndex: 10,
+  },
+
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  title: {
+    color: "#ffffff",
+    fontSize: 20,
+    fontWeight: "700",
+  },
+
+  countBadge: {
+    minWidth: 44,
+    height: 44,
+    borderRadius: 22,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  countBadgeText: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+
+  scanContainer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 5,
+  },
+
+  scanBox: {
+    width: 260,
+    height: 260,
+    position: "relative",
+  },
+
+  corner: {
+    position: "absolute",
+    width: 45,
+    height: 45,
+    borderColor: "#ffffff",
+  },
+
+  topLeft: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 4,
+    borderLeftWidth: 4,
+  },
+
+  topRight: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 4,
+    borderRightWidth: 4,
+  },
+
+  bottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+  },
+
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+  },
+
+  instruction: {
+    marginTop: 25,
+    color: "#ffffff",
+    fontSize: 15,
+    textAlign: "center",
+    paddingHorizontal: 30,
+  },
+
+  bottomInfo: {
+    position: "absolute",
     left: 20,
     right: 20,
-    backgroundColor: "#fff",
-    borderRadius: 16,
+    bottom: 30,
     padding: 20,
-    alignItems: "center",
-    gap: 4,
+    borderRadius: 15,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    zIndex: 10,
   },
-  resultText: { fontSize: 13, color: "#374151", marginTop: 8 },
-  resultTitleSuccess: { fontSize: 15, fontWeight: "700", color: "#15803d" },
-  resultTitleError: { fontSize: 15, fontWeight: "700", color: "#b42318" },
-  resultName: { fontSize: 17, fontWeight: "700", color: "#0f172a", marginTop: 4 },
-  resultMeta: { fontSize: 13, color: "#64748b" },
-  scanAgainBtn: { backgroundColor: "#2563eb", borderRadius: 10, paddingVertical: 10, paddingHorizontal: 20, marginTop: 12 },
-  scanAgainText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-});
 
-export default ScannerScreen;
+  bottomTitle: {
+    color: "#ffffff",
+    fontSize: 17,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+
+  bottomText: {
+    color: "#dddddd",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
+  },
+
+  bottomCountText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 12,
+  },
+
+  messageBox: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    bottom: 30,
+    padding: 25,
+    borderRadius: 15,
+    backgroundColor: "rgba(0,0,0,0.88)",
+    alignItems: "center",
+    zIndex: 20,
+  },
+
+  messageTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginTop: 15,
+  },
+
+  successTitle: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+
+  checkoutTitle: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+
+  errorTitle: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+
+  messageText: {
+    color: "#ffffff",
+    fontSize: 16,
+    textAlign: "center",
+    marginTop: 6,
+  },
+
+  timeText: {
+    color: "#ffffff",
+    fontSize: 14,
+    marginTop: 8,
+  },
+
+  countText: {
+    color: "#9fd8ff",
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 10,
+  },
+
+  scanAgainButton: {
+    marginTop: 20,
+    paddingHorizontal: 25,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: "#ffffff",
+  },
+
+  scanAgainText: {
+    color: "#0b1f3a",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 25,
+    backgroundColor: "#ffffff",
+  },
+
+  loadingText: {
+    marginTop: 15,
+    fontSize: 16,
+  },
+
+  permissionTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 10,
+  },
+
+  permissionText: {
+    fontSize: 15,
+    textAlign: "center",
+    marginBottom: 25,
+  },
+
+  permissionButton: {
+    backgroundColor: "#0b1f3a",
+    paddingHorizontal: 30,
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+
+  permissionButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+
+  goBackButton: {
+    marginTop: 15,
+    padding: 12,
+  },
+
+  goBackText: {
+    color: "#0b1f3a",
+    fontSize: 16,
+  },
+});

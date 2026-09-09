@@ -1,0 +1,39 @@
+[33m9e9d619[m[33m ([m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge main into master, resolve conflicts favoring main, untrack db/pycache
+[33m63c3f59[m[33m ([m[1;31morigin/main[m[33m)[m Initial push of GeoAid project
+[33m5762d65[m Merge remote main with local GeoAid project
+[33m9df5e61[m Initial commit - GeoAid project
+[33mdbe3e74[m Initial commit - GeoAid project
+[33me9f8970[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m Signed-off-by: jamby <jambyaranton.gaspayad@my.smciligan.edu.ph>
+[33mc9d1afc[m modified
+[33m727a02b[m Update GeoAid system
+[33m0f024bd[m new update
+[33maaa7dfe[m Update GeoAid system
+[33m2fc33d5[m Update GeoAid system
+[33m6bca02b[m modified
+[33mbbdc361[m update
+[33m1273f2f[m Convert geoaid-mobile from broken submodule to regular folder
+[33mfd4dc0c[m add
+[33m99538a0[m update
+[33m37608e0[m update
+[33m9c4acd3[m add
+[33md9ddbf3[m add
+[33m54ce6bb[m add
+[33mbd897b7[m Merge branch 'master' of https://github.com/jambyyyy/GeoAid
+[33m07dd85b[m add
+[33m5f8818f[m Update resident app
+[33m99c0c6a[m Update resident app
+[33mfc94393[m Update backend, frontend; add resident app
+[33m0ff571a[m add
+[33m8736b16[m Merge branch 'master' of https://github.com/jambyyyy/GeoAid
+[33m2cf7fae[m Update GeoAid with latest project
+[33mf89e886[m Initial GeoAid project
+[33m4bb83f7[m Update GeoAid project
+[33m5524a17[m Stop tracking cache files and SQLite database
+[33m477ac9d[m Resolve merge conflicts
+[33m72d1c58[m modified
+[33m4a00053[m Remove duplicate backend folder
+[33ma4ae844[m Update GeoAid frontend and backend
+[33m5b10213[m commit add
+[33m1116040[m commit add
+[33m4d09e41[m Add landing page and update routes
+[33m2fe55fa[m added
