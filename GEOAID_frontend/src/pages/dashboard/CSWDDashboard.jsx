@@ -7,9 +7,8 @@ import { API_URL } from "../../config";
 const navItems = [
   "Dashboard",
   "Relief Distribution",
-  "Priority Beneficiaries",
-  "Households",
   "Vulnerability Profiles",
+  "Households",
   "Evacuation Centers",
   "Donations",
   "Reports",
@@ -27,9 +26,8 @@ const FLAG_CLASS = {
 const sectionInfo = {
   "Dashboard": { title: "CSWD Dashboard", subtitle: "City Social Welfare & Development — Relief & Beneficiary Operations" },
   "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed across barangays" },
-  "Priority Beneficiaries": { title: "Priority Beneficiaries", subtitle: "Senior citizens, PWD, pregnant women, and children under 5" },
   "Households": { title: "Households", subtitle: "Registered households under CSWD monitoring" },
-  "Vulnerability Profiles": { title: "Vulnerability Profiles", subtitle: "Household vulnerability assessments and risk classification" },
+  "Vulnerability Profiles": { title: "Vulnerability Profiles", subtitle: "Senior citizens, PWD, pregnant women, and children under 5 — ranked by priority level" },
   "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy across active evacuation sites" },
   "Donations": { title: "Donations", subtitle: "Inventory of donated goods available for distribution" },
   "Reports": { title: "Reports", subtitle: "Relief, vulnerability, and situation reports" },
@@ -81,6 +79,17 @@ function CSWDDashboard() {
   });
   const [isSubmittingDonation, setIsSubmittingDonation] = useState(false);
   const [donationFormError, setDonationFormError] = useState("");
+
+  const [reliefForm, setReliefForm] = useState({
+    household_code: "",
+    goods_type: "",
+    quantity: "",
+    disaster_type_id: "",
+    remarks: "",
+  });
+  const [isSubmittingRelief, setIsSubmittingRelief] = useState(false);
+  const [reliefFormError, setReliefFormError] = useState("");
+  const [reliefFormSuccess, setReliefFormSuccess] = useState("");
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -154,6 +163,73 @@ function CSWDDashboard() {
       setDonationFormError("Unable to connect to the server.");
     } finally {
       setIsSubmittingDonation(false);
+    }
+  };
+
+  const handleReliefFieldChange = (field, value) => {
+    setReliefForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleRecordRelief = async (e) => {
+    e.preventDefault();
+    setReliefFormError("");
+    setReliefFormSuccess("");
+
+    if (!reliefForm.household_code || !reliefForm.goods_type.trim() || !reliefForm.quantity) {
+      setReliefFormError("Household, goods type, and quantity are required.");
+      return;
+    }
+
+    setIsSubmittingRelief(true);
+    try {
+      const response = await fetch(`${API_URL}/api/cswd/relief/record/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reliefForm, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setReliefFormError(data.message || "Could not record this relief release. Please try again.");
+        return;
+      }
+
+      // Update this household in place so the checklist table below
+      // reflects "Relief Given" immediately, without waiting on a
+      // full dashboard refetch.
+      setDashboardData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          households: (prev.households || []).map((h) =>
+            h.id === data.relief.household_code
+              ? {
+                  ...h,
+                  relief_status: "Relief Given",
+                  relief_count: (h.relief_count || 0) + 1,
+                  relief_last_goods: data.relief.goods_type,
+                  relief_last_quantity: data.relief.quantity,
+                  relief_last_date: data.relief.distributed_at,
+                }
+              : h
+          ),
+        };
+      });
+
+      setReliefFormSuccess(`Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.household_code}.`);
+      setReliefForm({
+        household_code: "",
+        goods_type: "",
+        quantity: "",
+        disaster_type_id: "",
+        remarks: "",
+      });
+    } catch (err) {
+      console.error(err);
+      setReliefFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingRelief(false);
     }
   };
 
@@ -293,9 +369,8 @@ function CSWDDashboard() {
                 <h2>Quick Actions</h2>
                 <div className="action-grid">
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Relief Distribution")}>Record Relief Distribution</button>
-                  <button type="button" className="action-btn" onClick={() => setActiveItem("Priority Beneficiaries")}>Review Priority Cases</button>
+                  <button type="button" className="action-btn" onClick={() => setActiveItem("Vulnerability Profiles")}>Review Priority Cases</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Households")}>View Households</button>
-                  <button type="button" className="action-btn" onClick={() => setActiveItem("Vulnerability Profiles")}>Update Vulnerability Profile</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Evacuation Centers")}>Check Evacuation Centers</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Reports")}>Generate Report</button>
                 </div>
@@ -305,43 +380,161 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Relief Distribution" && (
-          <section className="panel">
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Barangay</th>
-                    <th>Families</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reliefDistribution.length > 0 ? (
-                    reliefDistribution.map((item, index) => (
-                      <tr key={index}>
-                        <td>{item.barangay}</td>
-                        <td>{item.families}</td>
-                        <td>
-                          <span className={`status-badge status-${String(item.status).toLowerCase().replace(/\s+/g, "-")}`}>
-                            {item.status}
-                          </span>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Record Relief Distribution</h2>
+              <form className="donation-form" onSubmit={handleRecordRelief}>
+                {reliefFormError && <p className="donation-form-error">{reliefFormError}</p>}
+                {reliefFormSuccess && <p className="panel-note">{reliefFormSuccess}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_household_code">Household</label>
+                  <select
+                    id="relief_household_code"
+                    value={reliefForm.household_code}
+                    onChange={(e) => handleReliefFieldChange("household_code", e.target.value)}
+                  >
+                    <option value="">Select a confirmed household</option>
+                    {allHouseholds.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.family_name} Family ({h.id}) — {h.barangay}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_goods_type">Goods Type</label>
+                  <input
+                    id="relief_goods_type"
+                    type="text"
+                    value={reliefForm.goods_type}
+                    onChange={(e) => handleReliefFieldChange("goods_type", e.target.value)}
+                    placeholder="e.g. Rice, canned goods, hygiene kit"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_quantity">Quantity</label>
+                  <input
+                    id="relief_quantity"
+                    type="number"
+                    min="0"
+                    value={reliefForm.quantity}
+                    onChange={(e) => handleReliefFieldChange("quantity", e.target.value)}
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_disaster_type_id">Disaster Type</label>
+                  <select
+                    id="relief_disaster_type_id"
+                    value={reliefForm.disaster_type_id}
+                    onChange={(e) => handleReliefFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {(dashboardData?.disaster_types || []).map((dt) => (
+                      <option key={dt.id} value={dt.id}>
+                        {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_remarks">Remarks (optional)</label>
+                  <input
+                    id="relief_remarks"
+                    type="text"
+                    value={reliefForm.remarks}
+                    onChange={(e) => handleReliefFieldChange("remarks", e.target.value)}
+                    placeholder="e.g. Picked up by household head"
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingRelief}>
+                    {isSubmittingRelief ? "Saving…" : "Record Relief Release"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Beneficiary Checklist</h2>
+              <div className="panel-toolbar">
+                <label htmlFor="relief-barangay-filter" className="panel-toolbar-label">
+                  Barangay:
+                </label>
+                <select
+                  id="relief-barangay-filter"
+                  className="barangay-select"
+                  value={selectedBarangay}
+                  onChange={(e) => setSelectedBarangay(e.target.value)}
+                >
+                  <option value="All">All Barangays</option>
+                  {BARANGAYS.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+                <span className="panel-toolbar-count">
+                  {filteredHouseholds.length} household{filteredHouseholds.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Household</th>
+                      <th>Barangay</th>
+                      <th>Priority</th>
+                      <th>Status</th>
+                      <th>Last Relief Given</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredHouseholds.length > 0 ? (
+                      filteredHouseholds.map((h) => (
+                        <tr key={h.id}>
+                          <td>{h.family_name} Family ({h.id})</td>
+                          <td>{h.barangay}</td>
+                          <td>
+                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
+                              {h.priority_level || "Low"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-badge status-${String(h.relief_status).toLowerCase().replace(/\s+/g, "-")}`}>
+                              {h.relief_status}
+                            </span>
+                          </td>
+                          <td>
+                            {h.relief_last_goods
+                              ? `${h.relief_last_quantity}x ${h.relief_last_goods} · ${h.relief_last_date}`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="5">
+                          {selectedBarangay === "All"
+                            ? "No confirmed households yet."
+                            : `No confirmed households in ${selectedBarangay} yet.`}
                         </td>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan="3">No relief distribution records yet.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
           </section>
         )}
 
-        {activeItem === "Priority Beneficiaries" && (
+        {activeItem === "Vulnerability Profiles" && (
           <section className="panel">
-            <h2>Priority Households</h2>
+            <h2>Vulnerability Profiles</h2>
               <div className="panel-toolbar">
                 <label htmlFor="priority-barangay-filter" className="panel-toolbar-label">
                   Barangay:
@@ -553,15 +746,6 @@ function CSWDDashboard() {
                 </tbody>
               </table>
             </div>
-          </section>
-        )}
-
-        {activeItem === "Vulnerability Profiles" && (
-          <section className="panel">
-            <p className="panel-note">
-              Vulnerability assessment profiles are not yet available from the dashboard API. This section
-              will show household risk classifications (low, medium, high) once that data is connected.
-            </p>
           </section>
         )}
 

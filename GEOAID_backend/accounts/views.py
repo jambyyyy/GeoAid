@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay
+from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay, ReliefDistribution
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -221,6 +221,18 @@ def _serialize_households(households_qs):
     ):
         present_by_household.setdefault(a.household_id, []).append(a)
 
+    # Same one-query-then-group approach for relief distribution records,
+    # replacing the old hardcoded "every household is Registered" mock.
+    # Ordered -distributed_at (see ReliefDistribution.Meta) so [0] below
+    # is always the most recent release for that household.
+    relief_by_household = {}
+    for r in (
+        ReliefDistribution.objects
+        .filter(household_id__in=household_ids)
+        .select_related("disaster_type")
+    ):
+        relief_by_household.setdefault(r.household_id, []).append(r)
+
     households = []
     for h in households_list:
         flags = set()
@@ -270,6 +282,9 @@ def _serialize_households(households_qs):
         checked_in_center = present_records[0].evacuation_center.name if present_records else None
         checked_in_members = [a.family_member.full_name for a in present_records]
 
+        relief_records = relief_by_household.get(h.id, [])
+        latest_relief = relief_records[0] if relief_records else None
+
         households.append({
             "id": h.household_code,
             "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
@@ -287,6 +302,11 @@ def _serialize_households(households_qs):
             "checked_in": checked_in,
             "checked_in_center": checked_in_center,
             "checked_in_members": checked_in_members,
+            "relief_status": "Relief Given" if relief_records else "Registered",
+            "relief_count": len(relief_records),
+            "relief_last_goods": latest_relief.goods_type if latest_relief else None,
+            "relief_last_quantity": latest_relief.quantity if latest_relief else None,
+            "relief_last_date": _format_ph(latest_relief.distributed_at, "%b %d, %Y") if latest_relief else None,
         })
 
     return households
@@ -310,10 +330,10 @@ def _priority_beneficiary_counts(households_qs):
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
     Purok President -> Barangay Staff review chain (status='confirmed').
-    Relief distribution doesn't have a backing model yet, so that stays
-    a clearly-labeled placeholder until that feature exists. Donations
-    are now backed by the Donation model (CSWD logs each drop-off
-    themselves from the Donations tab — see cswd_add_donation below)."""
+    Relief distribution is backed by the ReliefDistribution model (see
+    cswd_record_relief below for how CSWD logs a release). Donations are
+    backed by the Donation model (CSWD logs each drop-off themselves from
+    the Donations tab — see cswd_add_donation below)."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -334,17 +354,34 @@ def cswd_dashboard(request):
         | Q(is_four_ps=True)
     ).distinct().count()
 
-    relief_distribution = [
-        {
-            "barangay": row["barangay"] or "Unspecified",
-            "families": row["total"],
-            # TODO: replace with a real ReliefDistribution model; for now
-            # every confirmed household is just "Registered" and awaiting
-            # an actual relief-goods disbursement record.
-            "status": "Registered",
-        }
-        for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
-    ]
+    # Serialized once here (instead of again at the bottom of this
+    # function) so the per-barangay relief summary below and the
+    # per-household "households" list in the response both come from
+    # the exact same relief data — no risk of the two disagreeing.
+    serialized_households = _serialize_households(confirmed_qs)
+
+    relief_by_barangay = {}
+    for h in serialized_households:
+        entry = relief_by_barangay.setdefault(
+            h["barangay"], {"barangay": h["barangay"], "families": 0, "given": 0}
+        )
+        entry["families"] += 1
+        if h["relief_status"] == "Relief Given":
+            entry["given"] += 1
+
+    relief_distribution = []
+    for entry in sorted(relief_by_barangay.values(), key=lambda e: -e["families"]):
+        if entry["given"] == 0:
+            status = "Registered"
+        elif entry["given"] == entry["families"]:
+            status = "Relief Given"
+        else:
+            status = "Partial"
+        relief_distribution.append({
+            "barangay": entry["barangay"] or "Unspecified",
+            "families": entry["families"],
+            "status": status,
+        })
 
     from .models import DisasterType
 
@@ -371,9 +408,7 @@ def cswd_dashboard(request):
     data = {
         "total_households": confirmed_qs.count(),
         "priority_cases": priority_cases,
-        # TODO: relief_released needs a real ReliefDistribution model —
-        # no such data exists yet.
-        "relief_released": 0,
+        "relief_released": ReliefDistribution.objects.filter(household__in=confirmed_qs).count(),
         "donations": donations_qs.count(),
 
         "relief_distribution": relief_distribution,
@@ -397,10 +432,78 @@ def cswd_dashboard(request):
             for c in EvacuationCenter.objects.all().order_by("barangay", "name")
         ],
 
-        "households": _serialize_households(confirmed_qs),
+        "households": serialized_households,
     }
 
     return JsonResponse(data)
+
+
+@csrf_exempt
+def cswd_record_relief(request):
+    """Lets CSWD staff log a relief release for a specific household from
+    the Relief Distribution tab. This is the write side of the
+    beneficiary checklist Objective 4 asks for — each call creates one
+    ReliefDistribution row, so a household's relief_status flips from
+    "Registered" to "Relief Given" the next time the dashboard is
+    fetched (see _serialize_households above)."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    household_code = (payload.get("household_code") or "").strip()
+    goods_type = (payload.get("goods_type") or "").strip()
+    quantity = payload.get("quantity")
+
+    if not household_code or not goods_type:
+        return JsonResponse({"message": "Household and goods type are required."}, status=400)
+
+    household = Household.objects.filter(household_code=household_code).first()
+    if not household:
+        return JsonResponse({"message": "Household not found."}, status=404)
+
+    try:
+        quantity = int(quantity)
+        if quantity < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Quantity must be a non-negative number."}, status=400)
+
+    disaster_type = None
+    disaster_type_id = payload.get("disaster_type_id")
+    if disaster_type_id:
+        from .models import DisasterType
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
+        if not disaster_type:
+            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+
+    relief = ReliefDistribution.objects.create(
+        household=household,
+        goods_type=goods_type,
+        quantity=quantity,
+        disaster_type=disaster_type,
+        distributed_by=(payload.get("username") or "").strip(),
+        remarks=(payload.get("remarks") or "").strip(),
+    )
+
+    return JsonResponse({
+        "success": True,
+        "relief": {
+            "id": relief.id,
+            "household_code": household.household_code,
+            "goods_type": relief.goods_type,
+            "quantity": relief.quantity,
+            "distributed_at": relief.distributed_at.strftime("%b %d, %Y"),
+            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
+        },
+    })
 
 
 @csrf_exempt

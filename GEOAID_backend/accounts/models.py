@@ -288,3 +288,35 @@ class Donation(models.Model):
 
     def __str__(self):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
+
+
+class ReliefDistribution(models.Model):
+    """Matches the ERD's relief_distribution entity — the beneficiary
+    checklist Objective 4 calls for. One row = one relief release event
+    to a specific household, logged by CSWD staff from the Relief
+    Distribution tab. A household can have several rows over time (e.g.
+    relief given for two different disasters), which is why this is its
+    own table rather than a single status flag on Household — that was
+    the previous placeholder behavior (every confirmed household just
+    showed "Registered", see the TODOs this model replaces)."""
+
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="relief_records"
+    )
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="relief_distributions"
+    )
+    goods_type = models.CharField(max_length=100)
+    quantity = models.PositiveIntegerField(default=0)
+    # Free-text name/username of the CSWD staffer who logged this — mirrors
+    # how the rest of the app identifies staff (sessionStorage "geoaid_user"
+    # on the frontend), not a FK to Django's auth User.
+    distributed_by = models.CharField(max_length=150, blank=True)
+    distributed_at = models.DateTimeField(default=timezone.now)
+    remarks = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-distributed_at"]
+
+    def __str__(self):
+        return f"{self.household.full_name} — {self.goods_type} x{self.quantity}"
