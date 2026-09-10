@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember
+from .models import Household, FamilyMember, EvacuationCenter, Attendance
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -207,8 +207,21 @@ def _serialize_households(households_qs):
     (Purok, Barangay, CSWD, DRRM) so a resident's registration renders
     identically everywhere it appears."""
 
+    households_list = list(households_qs)
+    household_ids = [h.id for h in households_list]
+
+    # One query for every household's currently-present Attendance
+    # records (not one query per household), then grouped in Python.
+    present_by_household = {}
+    for a in (
+        Attendance.objects
+        .filter(household_id__in=household_ids, attendance_status="Present")
+        .select_related("family_member", "evacuation_center")
+    ):
+        present_by_household.setdefault(a.household_id, []).append(a)
+
     households = []
-    for h in households_qs:
+    for h in households_list:
         flags = set()
         member_payload = []
 
@@ -235,6 +248,27 @@ def _serialize_households(households_qs):
         if h.is_four_ps:
             flags.add("4Ps")
 
+        # Priority classification from vulnerability flags. This is a
+        # starting point, not a formula from a fixed spec — PWD/Pregnant
+        # count double since those usually need more direct assistance
+        # than a 4Ps household ID alone. Adjust the weights below if you
+        # want a different priority formula.
+        weight = {"PWD": 2, "Pregnant": 2, "Elderly": 1, "Child<5": 1, "4Ps": 1}
+        priority_score = sum(weight.get(f, 0) for f in flags)
+        if priority_score >= 3:
+            priority_level = "High"
+        elif priority_score >= 1:
+            priority_level = "Medium"
+        else:
+            priority_level = "Low"
+
+        present_records = present_by_household.get(h.id, [])
+        checked_in = len(present_records) > 0
+        # Assumes one evacuation center per check-in event (a household
+        # doesn't split across centers) — takes the first record's center.
+        checked_in_center = present_records[0].evacuation_center.name if present_records else None
+        checked_in_members = [a.family_member.full_name for a in present_records]
+
         households.append({
             "id": h.household_code,
             "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
@@ -247,6 +281,11 @@ def _serialize_households(households_qs):
             "submitted": _format_ph(h.created_at, "%b %d, %Y · %I:%M %p"),
             "status": h.status,
             "members": member_payload,
+            "priority_score": priority_score,
+            "priority_level": priority_level,
+            "checked_in": checked_in,
+            "checked_in_center": checked_in_center,
+            "checked_in_members": checked_in_members,
         })
 
     return households
@@ -315,10 +354,16 @@ def cswd_dashboard(request):
         "relief_distribution": relief_distribution,
         "priority_beneficiaries": priority,
 
-        # TODO: replace with a real EvacuationCenter model.
         "evacuation_centers": [
-            {"name": "Apao Gymnasium", "occupancy": "120 / 200"},
-            {"name": "Hinaplanon Covered Court", "occupancy": "95 / 150"},
+            {
+                "id": c.id,
+                "name": c.name,
+                "barangay": c.barangay,
+                "occupancy": f"{c.current_occupancy} / {c.capacity}",
+                "occupancy_pct": round((c.current_occupancy / c.capacity) * 100) if c.capacity else 0,
+                "status": c.status,
+            }
+            for c in EvacuationCenter.objects.all().order_by("barangay", "name")
         ],
 
         "households": _serialize_households(confirmed_qs),

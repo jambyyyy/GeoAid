@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
@@ -52,6 +52,23 @@ const reports = [
   { title: "Donation Inventory Summary", type: "disaster_monitoring", date: "Jul 10, 2026" },
 ];
 
+// Matches Household.BARANGAY_CHOICES on the backend exactly.
+const BARANGAYS = [
+  "Mahayahay",
+  "Tambacan",
+  "Abuno",
+  "Hinaplanon",
+  "Pala-o Riverside",
+  "Tubod",
+  "Tipanoy",
+];
+
+const PRIORITY_CLASS = {
+  High: "priority-high",
+  Medium: "priority-medium",
+  Low: "priority-low",
+};
+
 function CSWDDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "CSWD Personnel";
@@ -60,6 +77,8 @@ function CSWDDashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selectedBarangay, setSelectedBarangay] = useState("All");
+  const [expandedHousehold, setExpandedHousehold] = useState(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -110,9 +129,20 @@ function CSWDDashboard() {
     );
   }
 
-  const priorityBeneficiaries = dashboardData?.priority_beneficiaries || {};
   const reliefDistribution = dashboardData?.relief_distribution || [];
   const evacuationCenters = dashboardData?.evacuation_centers || [];
+  const allHouseholds = dashboardData?.households || [];
+
+  // Filtered by the selected barangay, then sorted so the highest-priority
+  // (most vulnerable) households surface first — this is what lets CSWD
+  // staff scan one barangay and immediately see who needs attention.
+  const filteredHouseholds = (
+    selectedBarangay === "All"
+      ? allHouseholds
+      : allHouseholds.filter((h) => h.barangay === selectedBarangay)
+  )
+    .slice()
+    .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
 
   return (
     <div className="dashboard-page">
@@ -248,29 +278,106 @@ function CSWDDashboard() {
 
         {activeItem === "Priority Beneficiaries" && (
           <section className="panel">
-            <ul className="list">
-              <li>
-                <span>Senior Citizens</span>
-                <span className="value">{priorityBeneficiaries.senior_citizens ?? 0}</span>
-              </li>
-              <li>
-                <span>PWD</span>
-                <span className="value">{priorityBeneficiaries.pwd ?? 0}</span>
-              </li>
-              <li>
-                <span>Pregnant Women</span>
-                <span className="value">{priorityBeneficiaries.pregnant ?? 0}</span>
-              </li>
-              <li>
-                <span>Children Below 5</span>
-                <span className="value">{priorityBeneficiaries.children ?? 0}</span>
-              </li>
-            </ul>
-          </section>
+            <h2>Priority Households</h2>
+              <div className="panel-toolbar">
+                <label htmlFor="priority-barangay-filter" className="panel-toolbar-label">
+                  Barangay:
+                </label>
+                <select
+                  id="priority-barangay-filter"
+                  className="barangay-select"
+                  value={selectedBarangay}
+                  onChange={(e) => setSelectedBarangay(e.target.value)}
+                >
+                  <option value="All">All Barangays</option>
+                  {BARANGAYS.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+                <span className="panel-toolbar-count">
+                  {filteredHouseholds.length} household{filteredHouseholds.length === 1 ? "" : "s"} · highest priority first
+                </span>
+              </div>
+
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Household</th>
+                      <th>Barangay</th>
+                      <th>Purok</th>
+                      <th>Flags</th>
+                      <th>Priority</th>
+                      <th>Checked-In</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredHouseholds.length > 0 ? (
+                      filteredHouseholds.map((h) => (
+                        <tr key={h.id}>
+                          <td>{h.family_name} Family ({h.id})</td>
+                          <td>{h.barangay}</td>
+                          <td>{h.purok}</td>
+                          <td>
+                            {h.flags.length
+                              ? h.flags.map((f) => (
+                                <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
+                              ))
+                              : "—"}
+                          </td>
+                          <td>
+                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
+                              {h.priority_level || "Low"}
+                            </span>
+                          </td>
+                          <td>
+                            {h.checked_in ? (
+                              <span className="status-badge status-present">
+                                {h.checked_in_members.length} @ {h.checked_in_center}
+                              </span>
+                            ) : (
+                              <span className="status-badge status-checked-out">Not Checked In</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="6">
+                          {selectedBarangay === "All"
+                            ? "No confirmed households yet."
+                            : `No confirmed households in ${selectedBarangay} yet.`}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
         )}
 
         {activeItem === "Households" && (
           <section className="panel">
+            <div className="panel-toolbar">
+              <label htmlFor="barangay-filter" className="panel-toolbar-label">
+                Barangay:
+              </label>
+              <select
+                id="barangay-filter"
+                className="barangay-select"
+                value={selectedBarangay}
+                onChange={(e) => setSelectedBarangay(e.target.value)}
+              >
+                <option value="All">All Barangays</option>
+                {BARANGAYS.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+              <span className="panel-toolbar-count">
+                {filteredHouseholds.length} household{filteredHouseholds.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -280,30 +387,104 @@ function CSWDDashboard() {
                     <th>Purok</th>
                     <th>Members</th>
                     <th>Flags</th>
+                    <th>Priority</th>
+                    <th>Checked-In</th>
                     <th>Submitted</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(dashboardData?.households || []).length > 0 ? (
-                    dashboardData.households.map((h) => (
-                      <tr key={h.id}>
-                        <td>{h.family_name} Family ({h.id})</td>
-                        <td>{h.barangay}</td>
-                        <td>{h.purok}</td>
-                        <td>{h.members.length}</td>
-                        <td>
-                          {h.flags.length
-                            ? h.flags.map((f) => (
-                              <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
-                            ))
-                            : "—"}
-                        </td>
-                        <td>{h.submitted}</td>
-                      </tr>
+                  {filteredHouseholds.length > 0 ? (
+                    filteredHouseholds.map((h) => (
+                      <Fragment key={h.id}>
+                        <tr
+                          className="household-row"
+                          onClick={() => setExpandedHousehold(expandedHousehold === h.id ? null : h.id)}
+                        >
+                          <td>
+                            <span className="expand-caret">{expandedHousehold === h.id ? "▾" : "▸"}</span>
+                            {h.family_name} Family ({h.id})
+                          </td>
+                          <td>{h.barangay}</td>
+                          <td>{h.purok}</td>
+                          <td>{h.members.length}</td>
+                          <td>
+                            {h.flags.length
+                              ? h.flags.map((f) => (
+                                <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
+                              ))
+                              : "—"}
+                          </td>
+                          <td>
+                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
+                              {h.priority_level || "Low"}
+                            </span>
+                          </td>
+                          <td>
+                            {h.checked_in ? (
+                              <span className="status-badge status-present">
+                                {h.checked_in_members.length} @ {h.checked_in_center}
+                              </span>
+                            ) : (
+                              <span className="status-badge status-checked-out">Not Checked In</span>
+                            )}
+                          </td>
+                          <td>{h.submitted}</td>
+                        </tr>
+
+                        {expandedHousehold === h.id && (
+                          <tr className="household-detail-row">
+                            <td colSpan="8">
+                              <div className="household-detail">
+                                <div className="household-detail-col">
+                                  <p className="household-detail-label">Household Members</p>
+                                  <div className="member-list">
+                                    {h.members.map((m, i) => {
+                                      const isCheckedIn = h.checked_in_members?.includes(m.name);
+                                      return (
+                                        <div className="member-row" key={`${m.name}-${i}`}>
+                                          <span className="member-name">{m.name}</span>
+                                          <span className="member-meta">
+                                            {m.relation} · Age {m.age}
+                                            {m.tag ? ` · ${m.tag}` : ""}
+                                          </span>
+                                          {isCheckedIn && (
+                                            <span className="status-badge status-present member-checkin-tag">
+                                              Checked In
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                <div className="household-detail-col">
+                                  <p className="household-detail-label">Address</p>
+                                  <p className="household-detail-text">{h.address}</p>
+                                  {h.checked_in && (
+                                    <>
+                                      <p className="household-detail-label" style={{ marginTop: 14 }}>
+                                        Currently Checked In
+                                      </p>
+                                      <p className="household-detail-text">
+                                        {h.checked_in_members.join(", ")} — at {h.checked_in_center}
+                                      </p>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="6">No confirmed households yet.</td>
+                      <td colSpan="8">
+                        {selectedBarangay === "All"
+                          ? "No confirmed households yet."
+                          : `No confirmed households in ${selectedBarangay} yet.`}
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -328,20 +509,38 @@ function CSWDDashboard() {
                 <thead>
                   <tr>
                     <th>Center</th>
+                    <th>Barangay</th>
+                    <th>Status</th>
                     <th>Occupancy</th>
                   </tr>
                 </thead>
                 <tbody>
                   {evacuationCenters.length > 0 ? (
-                    evacuationCenters.map((center, index) => (
-                      <tr key={index}>
+                    evacuationCenters.map((center) => (
+                      <tr key={center.id}>
                         <td>{center.name}</td>
-                        <td>{center.occupancy}</td>
+                        <td>{center.barangay}</td>
+                        <td>
+                          <span className={`status-badge status-${center.status}`}>
+                            {center.status === "open" ? "OPEN" : "CLOSED"}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="occupancy-cell">
+                            <span>{center.occupancy}</span>
+                            <div className="occupancy-bar">
+                              <div
+                                className="occupancy-fill"
+                                style={{ width: `${center.occupancy_pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="2">No evacuation center data yet.</td>
+                      <td colSpan="4">No evacuation centers have been added yet.</td>
                     </tr>
                   )}
                 </tbody>
