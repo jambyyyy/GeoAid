@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../src/components/MobileShell";
-import { QRIcon, PinIcon, ClockIcon, BellIcon } from "../src/components/icons";
+import { QRIcon, PinIcon, ClockIcon } from "../src/components/icons";
 import { API_BASE } from "../src/api";
 
 // Shown if barangay/evacuation/dashboard/ hasn't been reached yet (e.g.
@@ -10,7 +10,6 @@ import { API_BASE } from "../src/api";
 const FALLBACK_DATA = {
   staff_name: "Barangay Staff",
   evacuation_center: { id: 0, name: "No center set up yet", occupancy: 0, capacity: 1, status: "closed" },
-  pending_registrations: 0,
   today_checkins: 0,
   recent_checkins: [],
 };
@@ -19,6 +18,8 @@ function StaffDashboardScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [checkinsPage, setCheckinsPage] = useState(0);
+  const CHECKINS_PER_PAGE = 5;
 
   const load = useCallback(async () => {
     const username = (await AsyncStorage.getItem("geoaid_staff_username")) || "";
@@ -50,6 +51,7 @@ function StaffDashboardScreen({ navigation }) {
   const onRefresh = async () => {
     setRefreshing(true);
     await load();
+    setCheckinsPage(0);
     setRefreshing(false);
   };
 
@@ -63,8 +65,15 @@ function StaffDashboardScreen({ navigation }) {
     );
   }
 
-  const { staff_name, evacuation_center, pending_registrations, today_checkins, recent_checkins = [] } = data;
+  const { staff_name, evacuation_center, today_checkins, recent_checkins = [] } = data;
   const occupancyPct = Math.round((evacuation_center.occupancy / Math.max(1, evacuation_center.capacity)) * 100);
+
+  const totalCheckinsPages = Math.max(1, Math.ceil(recent_checkins.length / CHECKINS_PER_PAGE));
+  const currentCheckinsPage = Math.min(checkinsPage, totalCheckinsPages - 1);
+  const pagedCheckins = recent_checkins.slice(
+    currentCheckinsPage * CHECKINS_PER_PAGE,
+    currentCheckinsPage * CHECKINS_PER_PAGE + CHECKINS_PER_PAGE
+  );
 
   return (
     <MobileShell>
@@ -115,11 +124,6 @@ function StaffDashboardScreen({ navigation }) {
               <Text style={styles.statValue}>{today_checkins}</Text>
               <Text style={styles.statLabel}>Check-ins Today</Text>
             </View>
-            <View style={styles.statCard}>
-              <BellIcon color="#b45309" />
-              <Text style={styles.statValue}>{pending_registrations}</Text>
-              <Text style={styles.statLabel}>Pending Registrations</Text>
-            </View>
           </View>
 
           <View style={styles.section}>
@@ -152,20 +156,47 @@ function StaffDashboardScreen({ navigation }) {
                 <Text style={styles.emptyText}>No check-ins recorded yet.</Text>
               </View>
             ) : (
-              <View style={styles.list}>
-                {recent_checkins.map((c, i) => (
-                  <View key={`${c.name}-${i}`} style={styles.checkinRow}>
-                    <View style={styles.checkinAvatar}>
-                      <PinIcon size={16} color="#2563eb" />
+              <>
+                <View style={styles.list}>
+                  {pagedCheckins.map((c, i) => (
+                    <View key={`${c.name}-${currentCheckinsPage}-${i}`} style={styles.checkinRow}>
+                      <View style={styles.checkinAvatar}>
+                        <PinIcon size={16} color="#2563eb" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.checkinName}>{c.name}</Text>
+                        <Text style={styles.checkinMeta}>{c.household}</Text>
+                      </View>
+                      <Text style={styles.checkinTime}>{c.time}</Text>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.checkinName}>{c.name}</Text>
-                      <Text style={styles.checkinMeta}>{c.household}</Text>
-                    </View>
-                    <Text style={styles.checkinTime}>{c.time}</Text>
+                  ))}
+                </View>
+
+                {totalCheckinsPages > 1 && (
+                  <View style={styles.pagerRow}>
+                    <TouchableOpacity
+                      style={[styles.pagerBtn, currentCheckinsPage === 0 && styles.pagerBtnDisabled]}
+                      onPress={() => setCheckinsPage((p) => Math.max(0, p - 1))}
+                      disabled={currentCheckinsPage === 0}
+                    >
+                      <Text style={styles.pagerBtnText}>Previous</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.pagerLabel}>
+                      Page {currentCheckinsPage + 1} of {totalCheckinsPages}
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.pagerBtn,
+                        currentCheckinsPage === totalCheckinsPages - 1 && styles.pagerBtnDisabled,
+                      ]}
+                      onPress={() => setCheckinsPage((p) => Math.min(totalCheckinsPages - 1, p + 1))}
+                      disabled={currentCheckinsPage === totalCheckinsPages - 1}
+                    >
+                      <Text style={styles.pagerBtnText}>Next</Text>
+                    </TouchableOpacity>
                   </View>
-                ))}
-              </View>
+                )}
+              </>
             )}
           </View>
         </ScrollView>
@@ -243,6 +274,23 @@ const styles = StyleSheet.create({
   checkinName: { fontWeight: "600", fontSize: 13, color: "#111827" },
   checkinMeta: { fontSize: 11, color: "#64748b" },
   checkinTime: { fontSize: 11, color: "#9aa3af" },
+  pagerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
+  pagerBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    backgroundColor: "#fff",
+  },
+  pagerBtnDisabled: { opacity: 0.4 },
+  pagerBtnText: { fontSize: 12, fontWeight: "600", color: "#374151" },
+  pagerLabel: { fontSize: 12, color: "#64748b" },
 });
 
 export default StaffDashboardScreen;

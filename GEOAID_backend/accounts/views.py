@@ -2,11 +2,34 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db.models import Count, Q
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from zoneinfo import ZoneInfo
 import json
 import uuid
 
 from .models import Household, FamilyMember
+
+# Explicit conversion to Philippine time — done here rather than relying
+# solely on settings.py's TIME_ZONE, so attendance timestamps display
+# correctly in PH time (UTC+8) even if the server itself runs in UTC or
+# another zone. Datetimes are still stored as timezone-aware UTC in the
+# database either way (Django/timezone.now() default) — only the display
+# formatting below is affected.
+PH_TZ = ZoneInfo("Asia/Manila")
+
+
+def _to_ph(dt):
+    """Converts an aware datetime to Philippine time, or returns None."""
+    if not dt:
+        return None
+    return timezone.localtime(dt, PH_TZ)
+
+
+def _format_ph(dt, fmt="%b %d, %Y %I:%M %p"):
+    """Formats a datetime in Philippine time. Returns '' if dt is None."""
+    ph = _to_ph(dt)
+    return ph.strftime(fmt) if ph else ""
 
 
 def _cors_preflight():
@@ -221,7 +244,7 @@ def _serialize_households(households_qs):
             "barangay": h.barangay or "—",
             "gps_lat": h.gps_lat,
             "gps_lng": h.gps_lng,
-            "submitted": h.created_at.strftime("%b %d, %Y · %I:%M %p"),
+            "submitted": _format_ph(h.created_at, "%b %d, %Y · %I:%M %p"),
             "status": h.status,
             "members": member_payload,
         })
@@ -492,28 +515,29 @@ def barangay_evacuation_dashboard(request):
             "message": f"No evacuation center is set up yet for {valid_barangay}.",
         }, status=404)
 
-    today = timezone.now().date()
+    # PH date, not UTC/server date — otherwise "today" flips over at UTC
+    # midnight (8am Philippine time), showing yesterday's check-ins as
+    # today's for part of the morning.
+    today = _to_ph(timezone.now()).date()
+    # Only counts residents still checked in (not "everyone who ever
+    # checked in today") — so this number goes back down when someone
+    # checks out, matching how the occupancy bar already behaves.
     today_checkins = Attendance.objects.filter(
         evacuation_center=center,
         check_in_time__date=today,
-    ).count()
-
-    pending_registrations = Household.objects.filter(
-        registration_complete=True,
-        barangay__iexact=valid_barangay,
-        status="approved",  # approved by Purok President, awaiting this barangay's confirmation
+        attendance_status="Present",
     ).count()
 
     recent = (
         Attendance.objects.filter(evacuation_center=center)
         .select_related("family_member", "household")
-        .order_by("-check_in_time")[:10]
+        .order_by("-check_in_time")[:25]
     )
     recent_checkins = [
         {
             "name": a.family_member.full_name,
             "household": f"{a.household.full_name} Household",
-            "time": a.check_in_time.strftime("%I:%M %p") if a.check_in_time else "",
+            "time": _format_ph(a.check_in_time, "%b %d, %Y %I:%M %p") if a.check_in_time else "",
         }
         for a in recent
     ]
@@ -533,8 +557,8 @@ def barangay_evacuation_dashboard(request):
             "resident": a.family_member.full_name,
             "household": f"{a.household.full_name} Household",
             "center": center.name,
-            "checkIn": a.check_in_time.strftime("%I:%M %p") if a.check_in_time else "—",
-            "checkOut": a.check_out_time.strftime("%I:%M %p") if a.check_out_time else "—",
+            "checkIn": _format_ph(a.check_in_time, "%b %d, %Y %I:%M %p") if a.check_in_time else "—",
+            "checkOut": _format_ph(a.check_out_time, "%b %d, %Y %I:%M %p") if a.check_out_time else "—",
             "status": "present" if a.attendance_status == "Present" else "checked-out",
         }
         for a in all_records
@@ -549,7 +573,6 @@ def barangay_evacuation_dashboard(request):
             "capacity": center.capacity,
             "status": center.status,
         },
-        "pending_registrations": pending_registrations,
         "today_checkins": today_checkins,
         "recent_checkins": recent_checkins,
         "attendance_records": attendance_records,
@@ -622,7 +645,7 @@ def attendance_scan(request):
                 "action": "checked_out",
                 "member_name": member.full_name,
                 "household_name": f"{member.household.full_name} Household",
-                "time": existing.check_out_time.strftime("%I:%M %p"),
+                "time": _format_ph(existing.check_out_time, "%b %d, %Y %I:%M %p"),
             })
 
         record = Attendance.objects.create(
@@ -639,7 +662,7 @@ def attendance_scan(request):
             "action": "checked_in",
             "member_name": member.full_name,
             "household_name": f"{member.household.full_name} Household",
-            "time": record.check_in_time.strftime("%I:%M %p"),
+            "time": _format_ph(record.check_in_time, "%b %d, %Y %I:%M %p"),
         })
 
     except Exception as e:
@@ -740,7 +763,7 @@ def purok_dashboard(request):
             "barangay": h.barangay or "—",
             "gps_lat": h.gps_lat,
             "gps_lng": h.gps_lng,
-            "submitted": h.created_at.strftime("%b %d, %Y · %I:%M %p"),
+            "submitted": _format_ph(h.created_at, "%b %d, %Y · %I:%M %p"),
             "status": h.status,
             "members": member_payload,
         })
