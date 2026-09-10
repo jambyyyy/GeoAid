@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation
+from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -57,19 +57,19 @@ GROUP_ROLE_MAP = {
 
 
 def _match_barangay(value):
-    """Match free text against Household.BARANGAY_CHOICES, case-insensitively.
-    Returns the canonical choice value (e.g. 'Abuno'), or '' if no match."""
+    """Match free text against the Barangay table, case-insensitively.
+    Returns the canonical barangay name (e.g. 'Abuno'), or '' if no match."""
 
     value = (value or "").strip().lower()
-    for choice_value, _label in Household.BARANGAY_CHOICES:
-        if choice_value.lower() == value:
-            return choice_value
+    for name in Barangay.objects.values_list("barangay_name", flat=True):
+        if name.lower() == value:
+            return name
     return ""
 
 
 def _barangay_for_username(username):
     """Looks up a staff username's Django user and matches their First
-    Name (Django admin > Users) against Household.BARANGAY_CHOICES.
+    Name (Django admin > Users) against the Barangay table.
     This is how a Purok President's dashboard gets scoped to their own
     barangay — using only the username the frontend already has in
     sessionStorage, so no extra login-page wiring is needed."""
@@ -380,6 +380,10 @@ def cswd_dashboard(request):
         "priority_beneficiaries": priority,
         "donation_records": donation_records,
         "disaster_types": disaster_types,
+        # Sourced from the Barangay table (Django admin > Barangays), not
+        # hardcoded — lets the "All Barangays" filter on the CSWD panel
+        # stay in sync with whatever barangays actually exist.
+        "barangays": list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)),
 
         "evacuation_centers": [
             {
@@ -665,6 +669,24 @@ def barangay_evacuation_dashboard(request):
             "message": f"No evacuation center is set up yet for {valid_barangay}.",
         }, status=404)
 
+    # All centers for this barangay — the Evacuation Centers tab lists
+    # every one of them (previously only "center" below was returned,
+    # so a barangay with more than one center only ever showed the
+    # oldest). Attendance/check-in scanning below still targets a single
+    # center ("center", the oldest by id) — that flow is unchanged.
+    all_centers_qs = EvacuationCenter.objects.filter(barangay__iexact=valid_barangay).order_by("id")
+    evacuation_centers = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "barangay": c.barangay,
+            "occupancy": c.current_occupancy,
+            "capacity": c.capacity,
+            "status": c.status,
+        }
+        for c in all_centers_qs
+    ]
+
     # PH date, not UTC/server date — otherwise "today" flips over at UTC
     # midnight (8am Philippine time), showing yesterday's check-ins as
     # today's for part of the morning.
@@ -730,6 +752,7 @@ def barangay_evacuation_dashboard(request):
             "capacity": center.capacity,
             "status": center.status,
         },
+        "evacuation_centers": evacuation_centers,
         "today_checkins": today_checkins,
         "recent_checkins": recent_checkins,
         "attendance_records": attendance_records,
@@ -1239,11 +1262,12 @@ def register_complete(request):
 
 def register_lookups(request):
     """Barangay + purok + dwelling type options for HouseholdStep.jsx's
-    dropdowns, sourced from the model's choices so there's one place
-    to update them instead of duplicating the lists in the frontend."""
+    dropdowns. Barangay names come live from the Barangay table (Django
+    admin > Barangays) — add or remove one there and it shows up here
+    automatically, no code changes needed."""
 
     return JsonResponse({
-        "barangays": [value for value, _label in Household.BARANGAY_CHOICES],
+        "barangays": list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)),
         "puroks": Household.PUROK_CHOICES_BY_BARANGAY,
         "dwelling_types": [
             {"value": value, "label": label}

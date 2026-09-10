@@ -47,18 +47,12 @@ class Household(models.Model):
     a mobile number + password, not a username, and don't need
     Django's admin/permissions machinery."""
 
-    # Registration is intentionally limited to Iligan City's flood-prone
-    # barangays for now (no "Other") — these are the same 7 named in the
-    # landing page hero copy and covered by CDRRMO flood advisories.
-    BARANGAY_CHOICES = [
-        ("Mahayahay", "Mahayahay"),
-        ("Tambacan", "Tambacan"),
-        ("Abuno", "Abuno"),
-        ("Hinaplanon", "Hinaplanon"),
-        ("Pala-o Riverside", "Pala-o Riverside"),
-        ("Tubod", "Tubod"),
-        ("Tipanoy", "Tipanoy"),
-    ]
+    # Barangay is no longer a hardcoded list here — it's driven by the
+    # Barangay table (see Barangay model above), managed through Django
+    # admin. Use Household.barangay_choices() anywhere a (value, label)
+    # choices list is needed (forms, admin dropdowns, etc.); it's built
+    # fresh from the database each time it's called, so adding/removing
+    # a Barangay row is all that's needed to update every dropdown.
 
     # Purok/Zone options per barangay, sourced from CDRRMO flood advisories,
     # news coverage of Tropical Storm Basyang (Feb 2026) and Typhoon Sendong,
@@ -84,6 +78,18 @@ class Household(models.Model):
         ("makeshift", "Makeshift / Informal settler structure"),
     ]
 
+    @staticmethod
+    def barangay_choices():
+        """(value, label) pairs built live from the Barangay table —
+        the single source of truth for barangay names across the app.
+        Not stored as a model-field `choices=` list because that would
+        be baked in at import time; call this wherever a fresh list is
+        needed instead (forms, admin, API responses)."""
+        return [
+            (name, name)
+            for name in Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)
+        ]
+
     # --- Step 1: Account Setup ---
     household_code = models.CharField(max_length=24, unique=True, editable=False)
     full_name = models.CharField(max_length=150)
@@ -92,7 +98,11 @@ class Household(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     # --- Step 2: Household Setup ---
-    barangay = models.CharField(max_length=50, choices=BARANGAY_CHOICES, blank=True)
+    # Plain text field, no hardcoded `choices=` — valid values come from
+    # the Barangay table (see barangay_choices() above). Kept as free
+    # text rather than a required FK so existing rows/behavior are
+    # untouched; barangay_fk below is the real relation going forward.
+    barangay = models.CharField(max_length=50, blank=True)
     # New FK matching the ERD's household.barangay_id — additive, populated
     # by a backfill script from the `barangay` text field above. Existing
     # code (_barangay_for_username, barangay_dashboard, etc.) keeps using
@@ -198,12 +208,14 @@ class EvacuationCenter(models.Model):
     mobile dashboard (barangay_evacuation_dashboard) can find the one
     their account is responsible for — the same way households are
     scoped, by matching the staff user's First Name in Django admin
-    against Household.BARANGAY_CHOICES."""
+    against the Barangay table (see Household.barangay_choices())."""
 
     STATUS_CHOICES = [("open", "Open"), ("closed", "Closed")]
 
     name = models.CharField(max_length=150)
-    barangay = models.CharField(max_length=50, choices=Household.BARANGAY_CHOICES)
+    # Plain text, no hardcoded `choices=` — see Household.barangay above
+    # for why. Valid values come from the Barangay table.
+    barangay = models.CharField(max_length=50)
     # New FK matching the ERD's evacuation_center.barangay_id — additive,
     # same backfill approach as Household.barangay_fk above.
     barangay_fk = models.ForeignKey(

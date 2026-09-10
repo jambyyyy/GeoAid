@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from .models import (
     Household,
@@ -10,13 +11,31 @@ from .models import (
 )
 
 
+def _barangay_choices():
+    """Built fresh from the Barangay table each time a form renders, so
+    admin dropdowns for `barangay` always reflect what's actually in
+    Django admin > Barangays — no hardcoded list to keep in sync."""
+    return [("", "---------")] + [
+        (name, name) for name in Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)
+    ]
+
+
 class FamilyMemberInline(admin.TabularInline):
     model = FamilyMember
     extra = 0
 
 
+class HouseholdAdminForm(forms.ModelForm):
+    barangay = forms.ChoiceField(choices=_barangay_choices, required=False)
+
+    class Meta:
+        model = Household
+        fields = "__all__"
+
+
 @admin.register(Household)
 class HouseholdAdmin(admin.ModelAdmin):
+    form = HouseholdAdminForm
     list_display = ("household_code", "full_name", "mobile_number", "barangay", "registration_complete", "created_at")
     list_filter = ("barangay", "dwelling_type", "is_four_ps", "registration_complete")
     search_fields = ("household_code", "full_name", "mobile_number")
@@ -31,8 +50,17 @@ class FamilyMemberAdmin(admin.ModelAdmin):
     search_fields = ("full_name", "household__full_name")
 
 
+class EvacuationCenterAdminForm(forms.ModelForm):
+    barangay = forms.ChoiceField(choices=_barangay_choices, required=True)
+
+    class Meta:
+        model = EvacuationCenter
+        fields = "__all__"
+
+
 @admin.register(EvacuationCenter)
 class EvacuationCenterAdmin(admin.ModelAdmin):
+    form = EvacuationCenterAdminForm
     list_display = ("name", "barangay", "current_occupancy", "capacity", "status")
     list_filter = ("barangay", "status")
     search_fields = ("name",)

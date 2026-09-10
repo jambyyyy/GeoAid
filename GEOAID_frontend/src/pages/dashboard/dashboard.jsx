@@ -509,7 +509,7 @@ function Dashboard() {
           <section className="panel">
             {evacuationError ? (
               <p className="empty-state">{evacuationError}</p>
-            ) : !evacuationData?.evacuation_center ? (
+            ) : !evacuationData?.evacuation_centers?.length ? (
               <p className="empty-state">Loading evacuation center data…</p>
             ) : (
               <div className="table-scroll">
@@ -524,18 +524,15 @@ function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(() => {
-                      const c = evacuationData.evacuation_center;
-                      return (
-                        <tr key={c.id}>
-                          <td>{c.name}</td>
-                          <td>{c.barangay}</td>
-                          <td>{c.capacity}</td>
-                          <td>{c.occupancy} / {c.capacity}</td>
-                          <td><span className={`status-badge status-${c.status}`}>{c.status}</span></td>
-                        </tr>
-                      );
-                    })()}
+                    {evacuationData.evacuation_centers.map((c) => (
+                      <tr key={c.id}>
+                        <td>{c.name}</td>
+                        <td>{c.barangay}</td>
+                        <td>{c.capacity}</td>
+                        <td>{c.occupancy} / {c.capacity}</td>
+                        <td><span className={`status-badge status-${c.status}`}>{c.status}</span></td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

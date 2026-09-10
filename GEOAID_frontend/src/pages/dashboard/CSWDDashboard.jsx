@@ -44,17 +44,6 @@ const reports = [
   { title: "Donation Inventory Summary", type: "disaster_monitoring", date: "Jul 10, 2026" },
 ];
 
-// Matches Household.BARANGAY_CHOICES on the backend exactly.
-const BARANGAYS = [
-  "Mahayahay",
-  "Tambacan",
-  "Abuno",
-  "Hinaplanon",
-  "Pala-o Riverside",
-  "Tubod",
-  "Tipanoy",
-];
-
 const PRIORITY_CLASS = {
   High: "priority-high",
   Medium: "priority-medium",
@@ -71,6 +60,11 @@ function CSWDDashboard() {
   const [error, setError] = useState("");
   const [selectedBarangay, setSelectedBarangay] = useState("All");
   const [expandedHousehold, setExpandedHousehold] = useState(null);
+
+  // Sourced from the database (Django admin > Barangays) via the
+  // dashboard API's "barangays" field — not hardcoded, so adding or
+  // removing a barangay there is reflected here automatically.
+  const BARANGAYS = dashboardData?.barangays || [];
 
   const [donationRecords, setDonationRecords] = useState([]);
   const [donationPage, setDonationPage] = useState(1);
