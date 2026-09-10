@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+__pycache__/
+*.py[cod]
+*.sqlite3
+.env
+.env.*
+
+/package-lock.json
+/GEOAID_backend/package-lock.json
+/GeoAid/
+/et --hard COMMIT_ID
+/GEOAID_frontend/.expo/
