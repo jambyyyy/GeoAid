@@ -12,6 +12,7 @@ const FALLBACK_DATA = {
   evacuation_center: { id: 0, name: "No center set up yet", occupancy: 0, capacity: 1, status: "closed" },
   today_checkins: 0,
   recent_checkins: [],
+  disaster_types: [],
 };
 
 function StaffDashboardScreen({ navigation }) {
@@ -65,7 +66,7 @@ function StaffDashboardScreen({ navigation }) {
     );
   }
 
-  const { staff_name, evacuation_center, today_checkins, recent_checkins = [] } = data;
+  const { staff_name, evacuation_center, today_checkins, recent_checkins = [], disaster_types = [] } = data;
   const occupancyPct = Math.round((evacuation_center.occupancy / Math.max(1, evacuation_center.capacity)) * 100);
 
   const totalCheckinsPages = Math.max(1, Math.ceil(recent_checkins.length / CHECKINS_PER_PAGE));
@@ -106,7 +107,7 @@ function StaffDashboardScreen({ navigation }) {
 
           <TouchableOpacity
             style={[styles.scanCard, !evacuation_center.id && styles.scanCardDisabled]}
-            onPress={() => navigation.navigate("Scanner")}
+            onPress={() => navigation.navigate("Scanner", { disasterTypes: disaster_types })}
             disabled={!evacuation_center.id}
           >
             <View style={styles.scanIconWrap}>

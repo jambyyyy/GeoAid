@@ -3,12 +3,13 @@ from django.contrib.auth.models import User
 from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.views.decorators.csrf import csrf_exempt
 from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember, EvacuationCenter, Attendance
+from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -309,8 +310,10 @@ def _priority_beneficiary_counts(households_qs):
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
     Purok President -> Barangay Staff review chain (status='confirmed').
-    Relief/donation figures don't have a backing model yet, so those
-    stay as clearly-labeled placeholders until that feature exists."""
+    Relief distribution doesn't have a backing model yet, so that stays
+    a clearly-labeled placeholder until that feature exists. Donations
+    are now backed by the Donation model (CSWD logs each drop-off
+    themselves from the Donations tab — see cswd_add_donation below)."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -343,16 +346,40 @@ def cswd_dashboard(request):
         for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
     ]
 
+    from .models import DisasterType
+
+    donations_qs = Donation.objects.select_related("disaster_type").all()
+    donation_records = [
+        {
+            "id": d.id,
+            "donor_name": d.donor_name,
+            "contact_num": d.contact_num,
+            "goods_type": d.goods_type,
+            "quantity": d.quantity,
+            "donation_date": d.donation_date.strftime("%b %d, %Y") if d.donation_date else "",
+            "status": d.status,
+            "disaster_type": d.disaster_type.disaster_type_name if d.disaster_type else "",
+        }
+        for d in donations_qs
+    ]
+
+    disaster_types = [
+        {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
+        for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
+    ]
+
     data = {
         "total_households": confirmed_qs.count(),
         "priority_cases": priority_cases,
-        # TODO: relief_released and donations need a real
-        # Relief/Donation model — no such data exists yet.
+        # TODO: relief_released needs a real ReliefDistribution model —
+        # no such data exists yet.
         "relief_released": 0,
-        "donations": 0,
+        "donations": donations_qs.count(),
 
         "relief_distribution": relief_distribution,
         "priority_beneficiaries": priority,
+        "donation_records": donation_records,
+        "disaster_types": disaster_types,
 
         "evacuation_centers": [
             {
@@ -370,6 +397,84 @@ def cswd_dashboard(request):
     }
 
     return JsonResponse(data)
+
+
+@csrf_exempt
+def cswd_add_donation(request):
+    """Lets CSWD staff log a donation drop-off themselves from the
+    Donations tab — this is manual data entry (there's no donor-facing
+    form), so the only validation here is "did they fill in the
+    required fields", not identity/ownership checks."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    donor_name = (payload.get("donor_name") or "").strip()
+    goods_type = (payload.get("goods_type") or "").strip()
+    quantity = payload.get("quantity")
+    status = (payload.get("status") or "pending").strip()
+
+    if not donor_name or not goods_type:
+        return JsonResponse({"message": "Donor name and goods type are required."}, status=400)
+
+    try:
+        quantity = int(quantity)
+        if quantity < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Quantity must be a non-negative number."}, status=400)
+
+    valid_statuses = dict(Donation.STATUS_CHOICES)
+    if status not in valid_statuses:
+        return JsonResponse({"message": f"Status must be one of: {', '.join(valid_statuses)}."}, status=400)
+
+    donation_date_raw = payload.get("donation_date")  # expects "YYYY-MM-DD" from the <input type="date">
+    if donation_date_raw:
+        donation_date = parse_date(donation_date_raw)
+        if not donation_date:
+            return JsonResponse({"message": "Donation date must be in YYYY-MM-DD format."}, status=400)
+    else:
+        donation_date = timezone.now().date()
+
+    disaster_type = None
+    disaster_type_id = payload.get("disaster_type_id")
+    if disaster_type_id:
+        from .models import DisasterType
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
+        if not disaster_type:
+            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+
+    donation = Donation.objects.create(
+        donor_name=donor_name,
+        contact_num=(payload.get("contact_num") or "").strip(),
+        goods_type=goods_type,
+        quantity=quantity,
+        donation_date=donation_date,
+        status=status,
+        disaster_type=disaster_type,
+    )
+
+    return JsonResponse({
+        "success": True,
+        "donation": {
+            "id": donation.id,
+            "donor_name": donation.donor_name,
+            "contact_num": donation.contact_num,
+            "goods_type": donation.goods_type,
+            "quantity": donation.quantity,
+            "donation_date": donation.donation_date.strftime("%b %d, %Y"),
+            "status": donation.status,
+            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
+        },
+    })
 
 
 @csrf_exempt
@@ -538,7 +643,7 @@ def barangay_evacuation_dashboard(request):
         return _cors_preflight()
 
     from django.utils import timezone
-    from .models import EvacuationCenter, Attendance
+    from .models import EvacuationCenter, Attendance, DisasterType
 
     username_param = (request.GET.get("username") or "").strip()
     valid_barangay = _barangay_for_username(username_param)
@@ -589,12 +694,12 @@ def barangay_evacuation_dashboard(request):
 
     # Fuller list for the web dashboard's Attendance tab — same records,
     # more fields, shaped to match dashboard.jsx's attendanceRecords
-    # (resident/household/center/checkIn/checkOut/status). "status" uses
-    # a hyphen ("checked-out") to match the status-checked-out CSS class
-    # already defined in dashboard.css.
+    # (resident/household/center/disasterType/checkIn/checkOut/status).
+    # "status" uses a hyphen ("checked-out") to match the
+    # status-checked-out CSS class already defined in dashboard.css.
     all_records = (
         Attendance.objects.filter(evacuation_center=center)
-        .select_related("family_member", "household")
+        .select_related("family_member", "household", "disaster_type")
         .order_by("-check_in_time")[:50]
     )
     attendance_records = [
@@ -602,6 +707,7 @@ def barangay_evacuation_dashboard(request):
             "resident": a.family_member.full_name,
             "household": f"{a.household.full_name} Household",
             "center": center.name,
+            "disasterType": a.disaster_type.disaster_type_name if a.disaster_type else "—",
             "checkIn": _format_ph(a.check_in_time, "%b %d, %Y %I:%M %p") if a.check_in_time else "—",
             "checkOut": _format_ph(a.check_out_time, "%b %d, %Y %I:%M %p") if a.check_out_time else "—",
             "status": "present" if a.attendance_status == "Present" else "checked-out",
@@ -609,11 +715,17 @@ def barangay_evacuation_dashboard(request):
         for a in all_records
     ]
 
+    disaster_types = [
+        {"id": dt.id, "name": dt.disaster_type_name}
+        for dt in DisasterType.objects.filter(status="active").order_by("-start_date", "disaster_type_name")
+    ]
+
     return JsonResponse({
         "staff_name": username_param,
         "evacuation_center": {
             "id": center.id,
             "name": center.name,
+            "barangay": center.barangay,
             "occupancy": center.current_occupancy,
             "capacity": center.capacity,
             "status": center.status,
@@ -621,21 +733,26 @@ def barangay_evacuation_dashboard(request):
         "today_checkins": today_checkins,
         "recent_checkins": recent_checkins,
         "attendance_records": attendance_records,
+        "disaster_types": disaster_types,
     })
 
 
 @csrf_exempt
 def attendance_scan(request):
-    """POST body: { "username": "<staff username>", "qr_code": "<FamilyMember.qr_code>" }
+    """POST body: { "username": "<staff username>", "qr_code": "<FamilyMember.qr_code>",
+    "disaster_type_id": <optional int> }
 
     Looks up the resident by the QR token QRCodeScreen.js renders, finds
     the scanning staff member's assigned evacuation center (same
     barangay-scoping as barangay_dashboard), and toggles the resident
     checked-in / checked-out. Also keeps EvacuationCenter.current_occupancy
-    in sync so the dashboard occupancy bar stays accurate."""
+    in sync so the dashboard occupancy bar stays accurate. disaster_type_id
+    (from the picker in ScannerScreen.js) is only applied on check-in,
+    since a check-out updates the same Attendance row that was already
+    tagged when the resident checked in."""
 
     from django.utils import timezone
-    from .models import EvacuationCenter, Attendance
+    from .models import EvacuationCenter, Attendance, DisasterType
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -647,6 +764,7 @@ def attendance_scan(request):
         data = json.loads(request.body)
         username_param = (data.get("username") or "").strip()
         qr_code = (data.get("qr_code") or "").strip()
+        disaster_type_id = data.get("disaster_type_id")
 
         valid_barangay = _barangay_for_username(username_param)
         if not valid_barangay:
@@ -693,10 +811,13 @@ def attendance_scan(request):
                 "time": _format_ph(existing.check_out_time, "%b %d, %Y %I:%M %p"),
             })
 
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first() if disaster_type_id else None
+
         record = Attendance.objects.create(
             family_member=member,
             household=member.household,
             evacuation_center=center,
+            disaster_type=disaster_type,
             check_in_time=timezone.now(),
             attendance_status="Present",
         )
@@ -708,6 +829,7 @@ def attendance_scan(request):
             "member_name": member.full_name,
             "household_name": f"{member.household.full_name} Household",
             "time": _format_ph(record.check_in_time, "%b %d, %Y %I:%M %p"),
+            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
         })
 
     except Exception as e:

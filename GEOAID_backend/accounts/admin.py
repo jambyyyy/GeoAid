@@ -6,6 +6,7 @@ from .models import (
     Attendance,
     Barangay,
     DisasterType,
+    Donation,
 )
 
 
@@ -56,3 +57,10 @@ class DisasterTypeAdmin(admin.ModelAdmin):
     list_display = ("disaster_type_name", "start_date", "end_date", "status")
     list_filter = ("status",)
     search_fields = ("disaster_type_name",)
+
+
+@admin.register(Donation)
+class DonationAdmin(admin.ModelAdmin):
+    list_display = ("donor_name", "goods_type", "quantity", "donation_date", "disaster_type", "status")
+    list_filter = ("status", "disaster_type")
+    search_fields = ("donor_name", "contact_num", "goods_type")

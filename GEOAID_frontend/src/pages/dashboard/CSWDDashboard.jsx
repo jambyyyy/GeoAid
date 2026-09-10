@@ -36,14 +36,6 @@ const sectionInfo = {
   "Settings": { title: "Settings", subtitle: "Manage your CSWD account preferences" },
 };
 
-// Static donation inventory (not yet part of the dashboard API response)
-const donationInventory = [
-  { item: "Rice Packs", quantity: "1,200" },
-  { item: "Water Bottles", quantity: "3,500" },
-  { item: "Canned Goods", quantity: "2,700" },
-  { item: "Blankets", quantity: "400" },
-];
-
 // Static reports list (not yet part of the dashboard API response)
 const reports = [
   { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
@@ -80,6 +72,22 @@ function CSWDDashboard() {
   const [selectedBarangay, setSelectedBarangay] = useState("All");
   const [expandedHousehold, setExpandedHousehold] = useState(null);
 
+  const [donationRecords, setDonationRecords] = useState([]);
+  const [donationPage, setDonationPage] = useState(1);
+  const [expandedDonation, setExpandedDonation] = useState(null);
+  const DONATIONS_PER_PAGE = 5;
+  const [donationForm, setDonationForm] = useState({
+    donor_name: "",
+    contact_num: "",
+    goods_type: "",
+    quantity: "",
+    donation_date: "",
+    status: "pending",
+    disaster_type_id: "",
+  });
+  const [isSubmittingDonation, setIsSubmittingDonation] = useState(false);
+  const [donationFormError, setDonationFormError] = useState("");
+
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
@@ -90,6 +98,7 @@ function CSWDDashboard() {
         const data = await response.json();
 
         setDashboardData(data);
+        setDonationRecords(data.donation_records || []);
       } catch (err) {
         console.error(err);
         setError("Failed to load dashboard data.");
@@ -105,6 +114,53 @@ function CSWDDashboard() {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
     navigate("/");
+  };
+
+  const handleDonationFieldChange = (field, value) => {
+    setDonationForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddDonation = async (e) => {
+    e.preventDefault();
+    setDonationFormError("");
+
+    if (!donationForm.donor_name.trim() || !donationForm.goods_type.trim() || !donationForm.quantity) {
+      setDonationFormError("Donor name, goods type, and quantity are required.");
+      return;
+    }
+
+    setIsSubmittingDonation(true);
+    try {
+      const response = await fetch(`${API_URL}/api/cswd/donations/add/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...donationForm, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setDonationFormError(data.message || "Could not log this donation. Please try again.");
+        return;
+      }
+
+      setDonationRecords((prev) => [data.donation, ...prev]);
+      setDonationPage(1);
+      setDonationForm({
+        donor_name: "",
+        contact_num: "",
+        goods_type: "",
+        quantity: "",
+        donation_date: "",
+        status: "pending",
+        disaster_type_id: "",
+      });
+    } catch (err) {
+      console.error(err);
+      setDonationFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingDonation(false);
+    }
   };
 
   const { title, subtitle } = sectionInfo[activeItem];
@@ -143,6 +199,19 @@ function CSWDDashboard() {
   )
     .slice()
     .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
+
+  const filteredEvacuationCenters = (
+    selectedBarangay === "All"
+      ? evacuationCenters
+      : evacuationCenters.filter((c) => c.barangay === selectedBarangay)
+  );
+
+  const totalDonationPages = Math.max(1, Math.ceil(donationRecords.length / DONATIONS_PER_PAGE));
+  const currentDonationPage = Math.min(donationPage, totalDonationPages);
+  const paginatedDonations = donationRecords.slice(
+    (currentDonationPage - 1) * DONATIONS_PER_PAGE,
+    currentDonationPage * DONATIONS_PER_PAGE
+  );
 
   return (
     <div className="dashboard-page">
@@ -186,8 +255,8 @@ function CSWDDashboard() {
               </article>
 
               <article className="stat-card stat-warning">
-                <span className="stat-value">₱{dashboardData?.donations ?? 0}</span>
-                <span className="stat-label">Donations</span>
+                <span className="stat-value">{dashboardData?.donations ?? 0}</span>
+                <span className="stat-label">Donations Logged</span>
               </article>
             </section>
 
@@ -504,6 +573,26 @@ function CSWDDashboard() {
 
         {activeItem === "Evacuation Centers" && (
           <section className="panel">
+            <div className="panel-toolbar">
+              <label htmlFor="evac-barangay-filter" className="panel-toolbar-label">
+                Barangay:
+              </label>
+              <select
+                id="evac-barangay-filter"
+                className="barangay-select"
+                value={selectedBarangay}
+                onChange={(e) => setSelectedBarangay(e.target.value)}
+              >
+                <option value="All">All Barangays</option>
+                {BARANGAYS.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+              <span className="panel-toolbar-count">
+                {filteredEvacuationCenters.length} center{filteredEvacuationCenters.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -515,8 +604,8 @@ function CSWDDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {evacuationCenters.length > 0 ? (
-                    evacuationCenters.map((center) => (
+                  {filteredEvacuationCenters.length > 0 ? (
+                    filteredEvacuationCenters.map((center) => (
                       <tr key={center.id}>
                         <td>{center.name}</td>
                         <td>{center.barangay}</td>
@@ -525,22 +614,16 @@ function CSWDDashboard() {
                             {center.status === "open" ? "OPEN" : "CLOSED"}
                           </span>
                         </td>
-                        <td>
-                          <div className="occupancy-cell">
-                            <span>{center.occupancy}</span>
-                            <div className="occupancy-bar">
-                              <div
-                                className="occupancy-fill"
-                                style={{ width: `${center.occupancy_pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        </td>
+                        <td>{center.occupancy}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="4">No evacuation centers have been added yet.</td>
+                      <td colSpan="4">
+                        {selectedBarangay === "All"
+                          ? "No evacuation centers have been added yet."
+                          : `No evacuation center is set up yet for ${selectedBarangay}.`}
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -550,15 +633,193 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Donations" && (
-          <section className="panel">
-            <ul className="list">
-              {donationInventory.map((entry) => (
-                <li key={entry.item}>
-                  <span>{entry.item}</span>
-                  <span className="value">{entry.quantity}</span>
-                </li>
-              ))}
-            </ul>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Log a Donation</h2>
+              <form className="donation-form" onSubmit={handleAddDonation}>
+                {donationFormError && <p className="donation-form-error">{donationFormError}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="donor_name">Donor Name</label>
+                  <input
+                    id="donor_name"
+                    type="text"
+                    value={donationForm.donor_name}
+                    onChange={(e) => handleDonationFieldChange("donor_name", e.target.value)}
+                    placeholder="e.g. Juan Dela Cruz"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="contact_num">Contact Number</label>
+                  <input
+                    id="contact_num"
+                    type="text"
+                    value={donationForm.contact_num}
+                    onChange={(e) => handleDonationFieldChange("contact_num", e.target.value)}
+                    placeholder="Optional"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="goods_type">Goods Type</label>
+                  <input
+                    id="goods_type"
+                    type="text"
+                    value={donationForm.goods_type}
+                    onChange={(e) => handleDonationFieldChange("goods_type", e.target.value)}
+                    placeholder="e.g. Rice Packs"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="quantity">Quantity</label>
+                  <input
+                    id="quantity"
+                    type="number"
+                    min="0"
+                    value={donationForm.quantity}
+                    onChange={(e) => handleDonationFieldChange("quantity", e.target.value)}
+                    placeholder="e.g. 50"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="donation_date">Donation Date</label>
+                  <input
+                    id="donation_date"
+                    type="date"
+                    value={donationForm.donation_date}
+                    onChange={(e) => handleDonationFieldChange("donation_date", e.target.value)}
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="status">Status</label>
+                  <select
+                    id="status"
+                    value={donationForm.status}
+                    onChange={(e) => handleDonationFieldChange("status", e.target.value)}
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="received">Received</option>
+                    <option value="distributed">Distributed</option>
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="disaster_type_id">Disaster Type</label>
+                  <select
+                    id="disaster_type_id"
+                    value={donationForm.disaster_type_id}
+                    onChange={(e) => handleDonationFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {(dashboardData?.disaster_types || []).map((dt) => (
+                      <option key={dt.id} value={dt.id}>
+                        {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingDonation}>
+                    {isSubmittingDonation ? "Saving…" : "Add Donation"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Donation Records</h2>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Donor</th>
+                      <th>Goods Type</th>
+                      <th>Quantity</th>
+                      <th>Date</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedDonations.length > 0 ? (
+                      paginatedDonations.map((d) => (
+                        <Fragment key={d.id}>
+                          <tr
+                            className="household-row"
+                            onClick={() => setExpandedDonation(expandedDonation === d.id ? null : d.id)}
+                          >
+                            <td>
+                              <span className="expand-caret">{expandedDonation === d.id ? "▾" : "▸"}</span>
+                              {d.donor_name}
+                            </td>
+                            <td>{d.goods_type}</td>
+                            <td>{d.quantity}</td>
+                            <td>{d.donation_date}</td>
+                            <td>
+                              <span className={`status-badge status-${d.status}`}>{d.status}</span>
+                            </td>
+                          </tr>
+
+                          {expandedDonation === d.id && (
+                            <tr className="household-detail-row">
+                              <td colSpan="5">
+                                <dl className="details-list">
+                                  <div className="details-row">
+                                    <dt>Contact Number</dt>
+                                    <dd>{d.contact_num || "—"}</dd>
+                                  </div>
+                                  <div className="details-row">
+                                    <dt>Disaster Type</dt>
+                                    <dd>{d.disaster_type || "—"}</dd>
+                                  </div>
+                                  <div className="details-row">
+                                    <dt>Logged By</dt>
+                                    <dd>{d.logged_by || "—"}</dd>
+                                  </div>
+                                </dl>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="5">No donations logged yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {donationRecords.length > DONATIONS_PER_PAGE && (
+                <div className="panel-toolbar" style={{ marginTop: 14, marginBottom: 0 }}>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={currentDonationPage === 1}
+                    onClick={() => setDonationPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </button>
+                  <span className="panel-toolbar-count" style={{ marginLeft: 0 }}>
+                    Page {currentDonationPage} of {totalDonationPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={currentDonationPage === totalDonationPages}
+                    onClick={() => setDonationPage((p) => Math.min(totalDonationPages, p + 1))}
+                    style={{ marginLeft: "auto" }}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </article>
           </section>
         )}
 

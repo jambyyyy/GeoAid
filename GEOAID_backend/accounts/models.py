@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.hashers import make_password, check_password
+from django.contrib.auth.models import User
 from django.utils import timezone
 import random
 
@@ -246,3 +247,32 @@ class Attendance(models.Model):
 
     def __str__(self):
         return f"{self.family_member.full_name} @ {self.evacuation_center.name} ({self.attendance_status})"
+
+
+class Donation(models.Model):
+    """Matches the ERD's donation entity — a single donation drop-off
+    (goods, not cash) logged by a staff account (CSWD for now). Feeds
+    the CSWD Dashboard's Donations tab, which previously showed a
+    static, made-up inventory list."""
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("received", "Received"),
+        ("distributed", "Distributed"),
+    ]
+
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="donations"
+    )
+    donor_name = models.CharField(max_length=150)
+    contact_num = models.CharField(max_length=20, blank=True)
+    goods_type = models.CharField(max_length=100)
+    quantity = models.PositiveIntegerField(default=0)
+    donation_date = models.DateField(default=timezone.now)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="pending")
+
+    class Meta:
+        ordering = ["-donation_date"]
+
+    def __str__(self):
+        return f"{self.donor_name} — {self.goods_type} x{self.quantity}"

@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import {
   CameraView,
@@ -15,10 +16,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BackIcon } from "../src/components/icons";
 import { API_BASE } from "../src/api";
 
-export default function ScannerScreen({ navigation }) {
+export default function ScannerScreen({ navigation, route }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState(null);
+
+  const disasterTypes = route?.params?.disasterTypes || [];
+  const [selectedDisasterTypeId, setSelectedDisasterTypeId] = useState(
+    disasterTypes.length > 0 ? disasterTypes[0].id : null
+  );
 
   // Running count of people currently checked in today.
   // +1 on check_in, -1 on check_out.
@@ -55,6 +61,7 @@ export default function ScannerScreen({ navigation }) {
           body: JSON.stringify({
             username,
             qr_code: data,
+            disaster_type_id: selectedDisasterTypeId,
           }),
         }
       );
@@ -175,6 +182,54 @@ export default function ScannerScreen({ navigation }) {
         </View>
       </View>
 
+      {disasterTypes.length > 0 && status === "idle" && (
+        <View style={styles.disasterBar}>
+          <Text style={styles.disasterBarLabel}>Tagging check-ins to:</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.disasterChipRow}
+          >
+            <TouchableOpacity
+              style={[
+                styles.disasterChip,
+                selectedDisasterTypeId === null && styles.disasterChipActive,
+              ]}
+              onPress={() => setSelectedDisasterTypeId(null)}
+            >
+              <Text
+                style={[
+                  styles.disasterChipText,
+                  selectedDisasterTypeId === null && styles.disasterChipTextActive,
+                ]}
+              >
+                None
+              </Text>
+            </TouchableOpacity>
+
+            {disasterTypes.map((dt) => (
+              <TouchableOpacity
+                key={dt.id}
+                style={[
+                  styles.disasterChip,
+                  selectedDisasterTypeId === dt.id && styles.disasterChipActive,
+                ]}
+                onPress={() => setSelectedDisasterTypeId(dt.id)}
+              >
+                <Text
+                  style={[
+                    styles.disasterChipText,
+                    selectedDisasterTypeId === dt.id && styles.disasterChipTextActive,
+                  ]}
+                >
+                  {dt.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {status === "idle" && (
         <View style={styles.scanContainer}>
           <View style={styles.scanBox}>
@@ -244,6 +299,12 @@ export default function ScannerScreen({ navigation }) {
             <Text style={styles.timeText}>
               {result.time}
             </Text>
+
+            {result.disaster_type ? (
+              <Text style={styles.disasterTagText}>
+                Tagged to: {result.disaster_type}
+              </Text>
+            ) : null}
 
             <Text style={styles.countText}>
               Checked in today: {checkInsToday}
@@ -411,6 +472,57 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 18,
     fontWeight: "700",
+  },
+
+  disasterBar: {
+    position: "absolute",
+    top: 105,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 10,
+  },
+
+  disasterBarLabel: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+
+  disasterChipRow: {
+    gap: 8,
+  },
+
+  disasterChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+  },
+
+  disasterChipActive: {
+    backgroundColor: "#ffffff",
+    borderColor: "#ffffff",
+  },
+
+  disasterChipText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  disasterChipTextActive: {
+    color: "#0b1f3a",
+  },
+
+  disasterTagText: {
+    color: "#9fd8ff",
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 8,
   },
 
   scanContainer: {

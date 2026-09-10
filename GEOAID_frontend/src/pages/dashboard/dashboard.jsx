@@ -37,13 +37,6 @@ const STATUS_LABEL = {
 };
 
 // --- Static placeholders (no backing model yet) ---
-const evacuationCenters = [
-  { name: "Poblacion Elementary School", address: "Brgy. Poblacion", capacity: 300, occupancy: 142, status: "open" },
-  { name: "Brgy. Hinaplanon Covered Court", address: "Brgy. Hinaplanon", capacity: 150, occupancy: 150, status: "full" },
-  { name: "San Roque Barangay Hall", address: "Brgy. San Roque", capacity: 120, occupancy: 40, status: "open" },
-  { name: "Tibanga National High School", address: "Brgy. Tibanga", capacity: 200, occupancy: 0, status: "closed" },
-];
-
 const reliefDistribution = [
   { household: "Maria Dela Cruz", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1042", status: "claimed" },
   { household: "Elena Bautista", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1043", status: "claimed" },
@@ -243,6 +236,8 @@ function Dashboard() {
 
   const [activeTab, setActiveTab] = useState("approved");
   const [expandedId, setExpandedId] = useState(null);
+  const [attendancePage, setAttendancePage] = useState(1);
+  const ATTENDANCE_PAGE_SIZE = 10;
   const [toast, setToast] = useState(null);
   const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
   const [isReviewing, setIsReviewing] = useState(false);
@@ -299,6 +294,10 @@ function Dashboard() {
 
     fetchEvacuation();
   }, [username]);
+
+  useEffect(() => {
+    setAttendancePage(1);
+  }, [evacuationData]);
 
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
@@ -508,31 +507,39 @@ function Dashboard() {
 
         {activeItem === "Evacuation Centers" && (
           <section className="panel">
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Center Name</th>
-                    <th>Address</th>
-                    <th>Capacity</th>
-                    <th>Occupancy</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {evacuationCenters.map((c) => (
-                    <tr key={c.name}>
-                      <td>{c.name}</td>
-                      <td>{c.address}</td>
-                      <td>{c.capacity}</td>
-                      <td>{c.occupancy} / {c.capacity}</td>
-                      <td><span className={`status-badge status-${c.status}`}>{c.status}</span></td>
+            {evacuationError ? (
+              <p className="empty-state">{evacuationError}</p>
+            ) : !evacuationData?.evacuation_center ? (
+              <p className="empty-state">Loading evacuation center data…</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Center Name</th>
+                      <th>Barangay</th>
+                      <th>Capacity</th>
+                      <th>Occupancy</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="panel-note">Evacuation center data isn't backed by a real model yet — shown for layout only.</p>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const c = evacuationData.evacuation_center;
+                      return (
+                        <tr key={c.id}>
+                          <td>{c.name}</td>
+                          <td>{c.barangay}</td>
+                          <td>{c.capacity}</td>
+                          <td>{c.occupancy} / {c.capacity}</td>
+                          <td><span className={`status-badge status-${c.status}`}>{c.status}</span></td>
+                        </tr>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
 
@@ -573,36 +580,74 @@ function Dashboard() {
             ) : (evacuationData?.attendance_records || []).length === 0 ? (
               <p className="empty-state">No residents have checked in yet.</p>
             ) : (
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Resident</th>
-                      <th>Household</th>
-                      <th>Evacuation Center</th>
-                      <th>Check-In</th>
-                      <th>Check-Out</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {evacuationData.attendance_records.map((a, i) => (
-                      <tr key={`${a.resident}-${a.checkIn}-${i}`}>
-                        <td>{a.resident}</td>
-                        <td>{a.household}</td>
-                        <td>{a.center}</td>
-                        <td>{a.checkIn}</td>
-                        <td>{a.checkOut}</td>
-                        <td>
-                          <span className={`status-badge status-${a.status}`}>
-                            {a.status === "present" ? "Present" : "Checked Out"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              (() => {
+                const records = evacuationData.attendance_records;
+                const totalPages = Math.max(1, Math.ceil(records.length / ATTENDANCE_PAGE_SIZE));
+                const page = Math.min(attendancePage, totalPages);
+                const start = (page - 1) * ATTENDANCE_PAGE_SIZE;
+                const pageRecords = records.slice(start, start + ATTENDANCE_PAGE_SIZE);
+
+                return (
+                  <>
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Resident</th>
+                            <th>Household</th>
+                            <th>Evacuation Center</th>
+                            <th>Disaster Type</th>
+                            <th>Check-In</th>
+                            <th>Check-Out</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pageRecords.map((a, i) => (
+                            <tr key={`${a.resident}-${a.checkIn}-${start + i}`}>
+                              <td>{a.resident}</td>
+                              <td>{a.household}</td>
+                              <td>{a.center}</td>
+                              <td>{a.disasterType || "—"}</td>
+                              <td>{a.checkIn}</td>
+                              <td>{a.checkOut}</td>
+                              <td>
+                                <span className={`status-badge status-${a.status}`}>
+                                  {a.status === "present" ? "Present" : "Checked Out"}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {totalPages > 1 && (
+                      <div className="pagination">
+                        <button
+                          type="button"
+                          className="pagination-btn"
+                          onClick={() => setAttendancePage((p) => Math.max(1, p - 1))}
+                          disabled={page === 1}
+                        >
+                          Previous
+                        </button>
+                        <span className="pagination-info">
+                          Page {page} of {totalPages}
+                        </span>
+                        <button
+                          type="button"
+                          className="pagination-btn"
+                          onClick={() => setAttendancePage((p) => Math.min(totalPages, p + 1))}
+                          disabled={page === totalPages}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()
             )}
           </section>
         )}
