@@ -34,13 +34,12 @@ const sectionInfo = {
   "Settings": { title: "Settings", subtitle: "Manage your CSWD account preferences" },
 };
 
-// Static reports list (not yet part of the dashboard API response)
-const reports = [
-  { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
-  { title: "Priority Beneficiaries Summary", type: "relief_vulnerability", date: "Jul 12, 2026" },
-  { title: "Evacuation Center Occupancy Report", type: "situation", date: "Jul 11, 2026" },
-  { title: "Donation Inventory Summary", type: "disaster_monitoring", date: "Jul 10, 2026" },
-];
+
+const REPORT_TYPE_LABELS = {
+  relief_vulnerability: "Relief & Vulnerability",
+  situation: "Situation",
+  disaster_monitoring: "Disaster Monitoring",
+};
 
 const PRIORITY_CLASS = {
   High: "priority-high",
@@ -90,6 +89,16 @@ function CSWDDashboard() {
   const [isSubmittingRelief, setIsSubmittingRelief] = useState(false);
   const [reliefFormError, setReliefFormError] = useState("");
   const [reliefFormSuccess, setReliefFormSuccess] = useState("");
+
+  const [reportForm, setReportForm] = useState({
+    report_type: "",
+    title: "",
+    content: "",
+    disaster_type_id: "",
+  });
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportFormError, setReportFormError] = useState("");
+  const [expandedReportId, setExpandedReportId] = useState(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -230,6 +239,48 @@ function CSWDDashboard() {
       setReliefFormError("Unable to connect to the server.");
     } finally {
       setIsSubmittingRelief(false);
+    }
+  };
+
+  const handleReportFieldChange = (field, value) => {
+    setReportForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleGenerateReport = async (e) => {
+    e.preventDefault();
+    setReportFormError("");
+
+    if (!reportForm.report_type || !reportForm.title.trim() || !reportForm.content.trim()) {
+      setReportFormError("Report type, title, and content are required.");
+      return;
+    }
+
+    setIsSubmittingReport(true);
+    try {
+      const response = await fetch(`${API_URL}/api/reports/generate/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reportForm, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setReportFormError(data.message || "Could not generate this report. Please try again.");
+        return;
+      }
+
+      // Prepend the new report so it shows up immediately, without
+      // waiting on a full dashboard refetch.
+      setDashboardData((prev) =>
+        prev ? { ...prev, reports: [data.report, ...(prev.reports || [])] } : prev
+      );
+      setReportForm({ report_type: "", title: "", content: "", disaster_type_id: "" });
+    } catch (err) {
+      console.error(err);
+      setReportFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingReport(false);
     }
   };
 
@@ -1002,20 +1053,99 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Reports" && (
-          <section className="panel">
-            <ul className="reports-list">
-              {reports.map((r) => (
-                <li key={r.title}>
-                  <div>
-                    <p className="report-title">{r.title}</p>
-                    <span className="report-date">{r.date}</span>
-                  </div>
-                  <span className={`activity-type type-${r.type === "situation" ? "alert" : r.type === "disaster_monitoring" ? "dispatch" : "report"}`}>
-                    {r.type.replace("_", " ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Generate Report</h2>
+              <form className="donation-form" onSubmit={handleGenerateReport}>
+                {reportFormError && <p className="donation-form-error">{reportFormError}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="report_type">Report Type</label>
+                  <select
+                    id="report_type"
+                    value={reportForm.report_type}
+                    onChange={(e) => handleReportFieldChange("report_type", e.target.value)}
+                  >
+                    <option value="">Select a report type</option>
+                    {Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="report_disaster_type_id">Disaster Type</label>
+                  <select
+                    id="report_disaster_type_id"
+                    value={reportForm.disaster_type_id}
+                    onChange={(e) => handleReportFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {(dashboardData?.disaster_types || []).map((dt) => (
+                      <option key={dt.id} value={dt.id}>
+                        {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field" style={{ gridColumn: "1 / -1" }}>
+                  <label htmlFor="report_title">Title</label>
+                  <input
+                    id="report_title"
+                    type="text"
+                    value={reportForm.title}
+                    onChange={(e) => handleReportFieldChange("title", e.target.value)}
+                    placeholder="e.g. Weekly Relief & Vulnerability Report"
+                  />
+                </div>
+
+                <div className="donation-form-field" style={{ gridColumn: "1 / -1" }}>
+                  <label htmlFor="report_content">Content</label>
+                  <textarea
+                    id="report_content"
+                    rows={5}
+                    value={reportForm.content}
+                    onChange={(e) => handleReportFieldChange("content", e.target.value)}
+                    placeholder="Summarize the situation, relief activity, or disaster monitoring findings…"
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingReport}>
+                    {isSubmittingReport ? "Saving…" : "Generate Report"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Generated Reports</h2>
+              <ul className="reports-list">
+                {(dashboardData?.reports || []).length === 0 && (
+                  <p className="empty-state">No reports generated yet.</p>
+                )}
+                {(dashboardData?.reports || []).map((r) => {
+                  const isExpanded = expandedReportId === r.id;
+                  return (
+                    <li key={r.id} onClick={() => setExpandedReportId(isExpanded ? null : r.id)} style={{ cursor: "pointer", flexDirection: "column", alignItems: "stretch" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+                        <div>
+                          <p className="report-title">{r.title}</p>
+                          <span className="report-date">
+                            {r.date}{r.generated_by ? ` · ${r.generated_by}` : ""}{r.disaster_type ? ` · ${r.disaster_type}` : ""}
+                          </span>
+                        </div>
+                        <span className={`activity-type type-${r.type === "situation" ? "alert" : r.type === "disaster_monitoring" ? "dispatch" : "report"}`}>
+                          {REPORT_TYPE_LABELS[r.type] || r.type}
+                        </span>
+                      </div>
+                      {isExpanded && <p className="panel-note" style={{ marginTop: "10px" }}>{r.content}</p>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </article>
           </section>
         )}
 

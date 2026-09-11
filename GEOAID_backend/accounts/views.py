@@ -326,6 +326,92 @@ def _priority_beneficiary_counts(households_qs):
     }
 
 
+def _serialize_reports(limit=20):
+    """Most recent Report rows, shaped to match what the CSWD/Barangay/
+    DRRM Reports tabs already render (title/type/date), plus the full
+    content and who generated it. Shared across dashboards the same way
+    _serialize_households is — every role sees the same underlying
+    report list rather than a role-specific copy, since reports aren't
+    scoped to a barangay or role in the ERD (Table 3.24)."""
+
+    from .models import Report
+
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "type": r.report_type,
+            "content": r.content,
+            "date": _format_ph(r.created_at, "%b %d, %Y"),
+            "disaster_type": r.disaster_type.disaster_type_name if r.disaster_type else "",
+            "generated_by": r.generated_by.username if r.generated_by else "",
+        }
+        for r in Report.objects.select_related("disaster_type", "generated_by").order_by("-created_at")[:limit]
+    ]
+
+
+@csrf_exempt
+def generate_report(request):
+    """Lets any staff dashboard (CSWD, Barangay, DRRM) create a Report
+    row from its Reports tab's "Generate Report" form. Not scoped to a
+    role or barangay — matches the ERD, where a report just records
+    which user generated it (generated_by), not which role."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    from .models import Report, DisasterType
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    report_type = (payload.get("report_type") or "").strip()
+    title = (payload.get("title") or "").strip()
+    content = (payload.get("content") or "").strip()
+
+    valid_types = dict(Report.REPORT_TYPE_CHOICES)
+    if report_type not in valid_types:
+        return JsonResponse({"message": f"report_type must be one of: {', '.join(valid_types)}."}, status=400)
+    if not title or not content:
+        return JsonResponse({"message": "Title and content are required."}, status=400)
+
+    disaster_type = None
+    disaster_type_id = payload.get("disaster_type_id")
+    if disaster_type_id:
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
+        if not disaster_type:
+            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+
+    username = (payload.get("username") or "").strip()
+    generated_by = User.objects.filter(username=username).first() if username else None
+
+    report = Report.objects.create(
+        report_type=report_type,
+        title=title,
+        content=content,
+        disaster_type=disaster_type,
+        generated_by=generated_by,
+    )
+
+    return JsonResponse({
+        "success": True,
+        "report": {
+            "id": report.id,
+            "title": report.title,
+            "type": report.report_type,
+            "content": report.content,
+            "date": _format_ph(report.created_at, "%b %d, %Y"),
+            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
+            "generated_by": generated_by.username if generated_by else "",
+        },
+    })
+
+
 @csrf_exempt
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
@@ -433,6 +519,7 @@ def cswd_dashboard(request):
         ],
 
         "households": serialized_households,
+        "reports": _serialize_reports(),
     }
 
     return JsonResponse(data)
@@ -609,6 +696,8 @@ def drrm_dashboard(request):
         for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
     ]
 
+    from .models import DisasterType
+
     data = {
         "total_households": confirmed_qs.count(),
         "pending_review": all_qs.filter(status="pending").count(),
@@ -617,6 +706,11 @@ def drrm_dashboard(request):
         "priority_beneficiaries": _priority_beneficiary_counts(confirmed_qs),
         "barangay_breakdown": barangay_breakdown,
         "households": _serialize_households(confirmed_qs),
+        "reports": _serialize_reports(),
+        "disaster_types": [
+            {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
+            for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
+        ],
     }
 
     return JsonResponse(data)
@@ -660,6 +754,8 @@ def barangay_dashboard(request):
         .order_by("-created_at")
     )
 
+    from .models import DisasterType
+
     data = {
         "barangay": valid_barangay,
         "total_households": households_qs.filter(status="confirmed").count(),
@@ -670,6 +766,11 @@ def barangay_dashboard(request):
             barangay__iexact=valid_barangay,
         ).count(),
         "households": _serialize_households(households_qs),
+        "disaster_types": [
+            {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
+            for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
+        ],
+        "reports": _serialize_reports(),
     }
 
     return JsonResponse(data)
@@ -1019,48 +1120,6 @@ def purok_dashboard(request):
     if effective_purok:
         households_qs = households_qs.filter(purok__iexact=effective_purok)
 
-    households = []
-    for h in households_qs:
-        flags = set()
-        member_payload = []
-
-        for m in h.family_members.all():
-            tag = None
-            if m.is_pwd:
-                flags.add("PWD")
-                tag = f"PWD - {m.pwd_detail}" if m.pwd_detail else "PWD"
-            if m.is_pregnant:
-                flags.add("Pregnant")
-                tag = f"Pregnant - {m.pregnant_detail}" if m.pregnant_detail else "Pregnant"
-            if m.is_elderly:
-                flags.add("Elderly")
-            if m.is_child_under5:
-                flags.add("Child<5")
-
-            member_payload.append({
-                "name": m.full_name,
-                "relation": m.relation,
-                "age": m.age,
-                "tag": tag,
-            })
-
-        if h.is_four_ps:
-            flags.add("4Ps")
-
-        households.append({
-            "id": h.household_code,
-            "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
-            "flags": sorted(flags),
-            "address": h.address_line or "Address not provided",
-            "purok": h.purok or "—",
-            "barangay": h.barangay or "—",
-            "gps_lat": h.gps_lat,
-            "gps_lng": h.gps_lng,
-            "submitted": _format_ph(h.created_at, "%b %d, %Y · %I:%M %p"),
-            "status": h.status,
-            "members": member_payload,
-        })
-
     data = {
         "purok": effective_purok or "All Puroks",
         "barangay": valid_barangay,
@@ -1071,7 +1130,7 @@ def purok_dashboard(request):
             registration_complete=False,
             barangay__iexact=valid_barangay,
         ).count(),
-        "households": households,
+        "households": _serialize_households(households_qs),
     }
 
     return JsonResponse(data)

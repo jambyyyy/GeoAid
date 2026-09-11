@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import "./dashboard.css";
 import Sidebar from "../../components/sidebar";
@@ -36,19 +36,17 @@ const STATUS_LABEL = {
   rejected: "Rejected",
 };
 
-// --- Static placeholders (no backing model yet) ---
-const reliefDistribution = [
-  { household: "Maria Dela Cruz", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1042", status: "claimed" },
-  { household: "Elena Bautista", quantityGiven: 1, date: "Jul 12, 2026", trackingNo: "RD-1043", status: "claimed" },
-  { household: "Corazon Ibanez", quantityGiven: 1, date: "Jul 13, 2026", trackingNo: "RD-1044", status: "pending" },
-  { household: "Jomar Villareal", quantityGiven: 1, date: "Jul 13, 2026", trackingNo: "RD-1045", status: "unclaimed" },
-];
+const PRIORITY_CLASS = {
+  High: "priority-high",
+  Medium: "priority-medium",
+  Low: "priority-low",
+};
 
-const reports = [
-  { title: "Weekly Relief & Vulnerability Report", type: "relief_vulnerability", date: "Jul 13, 2026" },
-  { title: "Situation Report — Flood Watch, Poblacion", type: "situation", date: "Jul 12, 2026" },
-  { title: "Disaster Monitoring Summary — Week 28", type: "disaster_monitoring", date: "Jul 11, 2026" },
-];
+const REPORT_TYPE_LABELS = {
+  relief_vulnerability: "Relief & Vulnerability",
+  situation: "Situation",
+  disaster_monitoring: "Disaster Monitoring",
+};
 
 function CheckIcon() {
   return (
@@ -223,6 +221,26 @@ function Dashboard() {
 
   const [dashboardData, setDashboardData] = useState(null);
   const [households, setHouseholds] = useState([]);
+  const [reliefForm, setReliefForm] = useState({
+    household_code: "",
+    goods_type: "",
+    quantity: "",
+    disaster_type_id: "",
+    remarks: "",
+  });
+  const [isSubmittingRelief, setIsSubmittingRelief] = useState(false);
+  const [reliefFormError, setReliefFormError] = useState("");
+  const [reliefFormSuccess, setReliefFormSuccess] = useState("");
+
+  const [reportForm, setReportForm] = useState({
+    report_type: "",
+    title: "",
+    content: "",
+    disaster_type_id: "",
+  });
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportFormError, setReportFormError] = useState("");
+  const [expandedReportId, setExpandedReportId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -238,6 +256,7 @@ function Dashboard() {
   const [expandedId, setExpandedId] = useState(null);
   const [attendancePage, setAttendancePage] = useState(1);
   const ATTENDANCE_PAGE_SIZE = 10;
+  const [expandedAttendanceHousehold, setExpandedAttendanceHousehold] = useState(null);
   const [toast, setToast] = useState(null);
   const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
   const [isReviewing, setIsReviewing] = useState(false);
@@ -297,6 +316,7 @@ function Dashboard() {
 
   useEffect(() => {
     setAttendancePage(1);
+    setExpandedAttendanceHousehold(null);
   }, [evacuationData]);
 
   const handleLogout = () => {
@@ -368,6 +388,108 @@ function Dashboard() {
     setExpandedId((current) => (current === id ? null : id));
   };
 
+  const handleReliefFieldChange = (field, value) => {
+    setReliefForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleRecordRelief = async (e) => {
+    e.preventDefault();
+    setReliefFormError("");
+    setReliefFormSuccess("");
+
+    if (!reliefForm.household_code || !reliefForm.goods_type.trim() || !reliefForm.quantity) {
+      setReliefFormError("Household, goods type, and quantity are required.");
+      return;
+    }
+
+    setIsSubmittingRelief(true);
+    try {
+      const response = await fetch(`${API_URL}/api/barangay/relief/record/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reliefForm, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setReliefFormError(data.message || "Could not record this relief release. Please try again.");
+        return;
+      }
+
+      // Update this household in place so the checklist reflects
+      // "Relief Given" immediately, without a full dashboard refetch.
+      setHouseholds((prev) =>
+        prev.map((h) =>
+          h.id === data.relief.household_code
+            ? {
+                ...h,
+                relief_status: "Relief Given",
+                relief_count: (h.relief_count || 0) + 1,
+                relief_last_goods: data.relief.goods_type,
+                relief_last_quantity: data.relief.quantity,
+                relief_last_date: data.relief.distributed_at,
+              }
+            : h
+        )
+      );
+
+      setReliefFormSuccess(`Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.household_code}.`);
+      setReliefForm({
+        household_code: "",
+        goods_type: "",
+        quantity: "",
+        disaster_type_id: "",
+        remarks: "",
+      });
+    } catch (err) {
+      console.error(err);
+      setReliefFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingRelief(false);
+    }
+  };
+
+  const handleReportFieldChange = (field, value) => {
+    setReportForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleGenerateReport = async (e) => {
+    e.preventDefault();
+    setReportFormError("");
+
+    if (!reportForm.report_type || !reportForm.title.trim() || !reportForm.content.trim()) {
+      setReportFormError("Report type, title, and content are required.");
+      return;
+    }
+
+    setIsSubmittingReport(true);
+    try {
+      const response = await fetch(`${API_URL}/api/reports/generate/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reportForm, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setReportFormError(data.message || "Could not generate this report. Please try again.");
+        return;
+      }
+
+      setDashboardData((prev) =>
+        prev ? { ...prev, reports: [data.report, ...(prev.reports || [])] } : prev
+      );
+      setReportForm({ report_type: "", title: "", content: "", disaster_type_id: "" });
+    } catch (err) {
+      console.error(err);
+      setReportFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
   const { title, subtitle } = sectionInfo(barangay)[activeItem];
 
   if (loading) {
@@ -397,6 +519,10 @@ function Dashboard() {
   };
 
   const visibleHouseholds = households.filter((h) => h.status === activeTab);
+  // Only confirmed households are eligible beneficiaries — matches the
+  // same rule the CSWD dashboard's Relief Distribution tab uses, since
+  // "approved" households haven't been confirmed by this barangay yet.
+  const confirmedHouseholds = households.filter((h) => h.status === "confirmed");
 
   return (
     <div className="dashboard-page">
@@ -541,32 +667,129 @@ function Dashboard() {
         )}
 
         {activeItem === "Relief Distribution" && (
-          <section className="panel">
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Household</th>
-                    <th>Quantity Given</th>
-                    <th>Distribution Date</th>
-                    <th>Tracking No.</th>
-                    <th>Claim Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reliefDistribution.map((r) => (
-                    <tr key={r.trackingNo}>
-                      <td>{r.household}</td>
-                      <td>{r.quantityGiven}</td>
-                      <td>{r.date}</td>
-                      <td>{r.trackingNo}</td>
-                      <td><span className={`status-badge status-${r.status}`}>{r.status}</span></td>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Record Relief Distribution</h2>
+              <form className="donation-form" onSubmit={handleRecordRelief}>
+                {reliefFormError && <p className="donation-form-error">{reliefFormError}</p>}
+                {reliefFormSuccess && <p className="panel-note">{reliefFormSuccess}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_household_code">Household</label>
+                  <select
+                    id="relief_household_code"
+                    value={reliefForm.household_code}
+                    onChange={(e) => handleReliefFieldChange("household_code", e.target.value)}
+                  >
+                    <option value="">Select a confirmed household</option>
+                    {confirmedHouseholds.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.family_name} Family ({h.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_goods_type">Goods Type</label>
+                  <input
+                    id="relief_goods_type"
+                    type="text"
+                    value={reliefForm.goods_type}
+                    onChange={(e) => handleReliefFieldChange("goods_type", e.target.value)}
+                    placeholder="e.g. Rice, canned goods, hygiene kit"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_quantity">Quantity</label>
+                  <input
+                    id="relief_quantity"
+                    type="number"
+                    min="0"
+                    value={reliefForm.quantity}
+                    onChange={(e) => handleReliefFieldChange("quantity", e.target.value)}
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_disaster_type_id">Disaster Type</label>
+                  <select
+                    id="relief_disaster_type_id"
+                    value={reliefForm.disaster_type_id}
+                    onChange={(e) => handleReliefFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {(dashboardData?.disaster_types || []).map((dt) => (
+                      <option key={dt.id} value={dt.id}>
+                        {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="relief_remarks">Remarks (optional)</label>
+                  <input
+                    id="relief_remarks"
+                    type="text"
+                    value={reliefForm.remarks}
+                    onChange={(e) => handleReliefFieldChange("remarks", e.target.value)}
+                    placeholder="e.g. Picked up by household head"
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingRelief}>
+                    {isSubmittingRelief ? "Saving…" : "Record Relief Release"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Beneficiary Checklist</h2>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Household</th>
+                      <th>Priority</th>
+                      <th>Status</th>
+                      <th>Last Relief Given</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="panel-note">Relief distribution data isn't backed by a real model yet — shown for layout only.</p>
+                  </thead>
+                  <tbody>
+                    {confirmedHouseholds.length > 0 ? (
+                      confirmedHouseholds.map((h) => (
+                        <tr key={h.id}>
+                          <td>{h.family_name} Family ({h.id})</td>
+                          <td>
+                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
+                              {h.priority_level || "Low"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-badge status-${String(h.relief_status).toLowerCase().replace(/\s+/g, "-")}`}>
+                              {h.relief_status}
+                            </span>
+                          </td>
+                          <td>
+                            {h.relief_last_goods
+                              ? `${h.relief_last_quantity}x ${h.relief_last_goods} · ${h.relief_last_date}`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="4">No confirmed households in {barangay || "this barangay"} yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
           </section>
         )}
 
@@ -578,11 +801,31 @@ function Dashboard() {
               <p className="empty-state">No residents have checked in yet.</p>
             ) : (
               (() => {
-                const records = evacuationData.attendance_records;
-                const totalPages = Math.max(1, Math.ceil(records.length / ATTENDANCE_PAGE_SIZE));
+                // Group the flat scan-event list (one row per check-in AND
+                // per check-out — the same person checking in and out
+                // repeatedly is what made this table so long) into one
+                // row per household, with a "View Records" toggle to see
+                // that household's individual scan history underneath.
+                const groups = [];
+                const groupsByHousehold = {};
+                for (const a of evacuationData.attendance_records) {
+                  let group = groupsByHousehold[a.household];
+                  if (!group) {
+                    group = { household: a.household, center: a.center, records: [] };
+                    groupsByHousehold[a.household] = group;
+                    groups.push(group);
+                  }
+                  group.records.push(a);
+                }
+                // Records already arrive sorted newest-first overall, so
+                // each group's records (and therefore group.records[0],
+                // used below) are already newest-first too — no
+                // re-sorting needed.
+
+                const totalPages = Math.max(1, Math.ceil(groups.length / ATTENDANCE_PAGE_SIZE));
                 const page = Math.min(attendancePage, totalPages);
                 const start = (page - 1) * ATTENDANCE_PAGE_SIZE;
-                const pageRecords = records.slice(start, start + ATTENDANCE_PAGE_SIZE);
+                const pageGroups = groups.slice(start, start + ATTENDANCE_PAGE_SIZE);
 
                 return (
                   <>
@@ -590,31 +833,85 @@ function Dashboard() {
                       <table className="data-table">
                         <thead>
                           <tr>
-                            <th>Resident</th>
                             <th>Household</th>
                             <th>Evacuation Center</th>
-                            <th>Disaster Type</th>
-                            <th>Check-In</th>
-                            <th>Check-Out</th>
                             <th>Status</th>
+                            <th>Last Activity</th>
+                            <th>Total Visits</th>
+                            <th></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {pageRecords.map((a, i) => (
-                            <tr key={`${a.resident}-${a.checkIn}-${start + i}`}>
-                              <td>{a.resident}</td>
-                              <td>{a.household}</td>
-                              <td>{a.center}</td>
-                              <td>{a.disasterType || "—"}</td>
-                              <td>{a.checkIn}</td>
-                              <td>{a.checkOut}</td>
-                              <td>
-                                <span className={`status-badge status-${a.status}`}>
-                                  {a.status === "present" ? "Present" : "Checked Out"}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
+                          {pageGroups.map((group) => {
+                            const presentCount = group.records.filter((r) => r.status === "present").length;
+                            const latest = group.records[0];
+                            const isExpanded = expandedAttendanceHousehold === group.household;
+
+                            return (
+                              <Fragment key={group.household}>
+                                <tr>
+                                  <td>{group.household}</td>
+                                  <td>{group.center}</td>
+                                  <td>
+                                    <span className={`status-badge status-${presentCount > 0 ? "present" : "checked-out"}`}>
+                                      {presentCount > 0
+                                        ? `${presentCount} Present`
+                                        : "All Checked Out"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {latest.status === "present"
+                                      ? `Checked in ${latest.checkIn}`
+                                      : `Checked out ${latest.checkOut}`}
+                                  </td>
+                                  <td>{group.records.length}</td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="action-btn"
+                                      onClick={() =>
+                                        setExpandedAttendanceHousehold(isExpanded ? null : group.household)
+                                      }
+                                    >
+                                      {isExpanded ? "Hide Records" : "View Records"}
+                                    </button>
+                                  </td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr>
+                                    <td colSpan="6">
+                                      <table className="data-table">
+                                        <thead>
+                                          <tr>
+                                            <th>Resident</th>
+                                            <th>Disaster Type</th>
+                                            <th>Check-In</th>
+                                            <th>Check-Out</th>
+                                            <th>Status</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {group.records.map((a, i) => (
+                                            <tr key={`${a.resident}-${a.checkIn}-${i}`}>
+                                              <td>{a.resident}</td>
+                                              <td>{a.disasterType || "—"}</td>
+                                              <td>{a.checkIn}</td>
+                                              <td>{a.checkOut}</td>
+                                              <td>
+                                                <span className={`status-badge status-${a.status}`}>
+                                                  {a.status === "present" ? "Present" : "Checked Out"}
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -650,20 +947,99 @@ function Dashboard() {
         )}
 
         {activeItem === "Reports" && (
-          <section className="panel">
-            <ul className="reports-list">
-              {reports.map((r) => (
-                <li key={r.title}>
-                  <div>
-                    <p className="report-title">{r.title}</p>
-                    <span className="report-date">{r.date}</span>
-                  </div>
-                  <span className={`activity-type type-${r.type === "situation" ? "alert" : r.type === "disaster_monitoring" ? "dispatch" : "report"}`}>
-                    {r.type.replace("_", " ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Generate Report</h2>
+              <form className="donation-form" onSubmit={handleGenerateReport}>
+                {reportFormError && <p className="donation-form-error">{reportFormError}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="report_type">Report Type</label>
+                  <select
+                    id="report_type"
+                    value={reportForm.report_type}
+                    onChange={(e) => handleReportFieldChange("report_type", e.target.value)}
+                  >
+                    <option value="">Select a report type</option>
+                    {Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="report_disaster_type_id">Disaster Type</label>
+                  <select
+                    id="report_disaster_type_id"
+                    value={reportForm.disaster_type_id}
+                    onChange={(e) => handleReportFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {(dashboardData?.disaster_types || []).map((dt) => (
+                      <option key={dt.id} value={dt.id}>
+                        {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field" style={{ gridColumn: "1 / -1" }}>
+                  <label htmlFor="report_title">Title</label>
+                  <input
+                    id="report_title"
+                    type="text"
+                    value={reportForm.title}
+                    onChange={(e) => handleReportFieldChange("title", e.target.value)}
+                    placeholder="e.g. Situation Report — Flood Watch, Poblacion"
+                  />
+                </div>
+
+                <div className="donation-form-field" style={{ gridColumn: "1 / -1" }}>
+                  <label htmlFor="report_content">Content</label>
+                  <textarea
+                    id="report_content"
+                    rows={5}
+                    value={reportForm.content}
+                    onChange={(e) => handleReportFieldChange("content", e.target.value)}
+                    placeholder="Summarize the situation, relief activity, or disaster monitoring findings…"
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingReport}>
+                    {isSubmittingReport ? "Saving…" : "Generate Report"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Generated Reports</h2>
+              <ul className="reports-list">
+                {(dashboardData?.reports || []).length === 0 && (
+                  <p className="empty-state">No reports generated yet.</p>
+                )}
+                {(dashboardData?.reports || []).map((r) => {
+                  const isExpanded = expandedReportId === r.id;
+                  return (
+                    <li key={r.id} onClick={() => setExpandedReportId(isExpanded ? null : r.id)} style={{ cursor: "pointer", flexDirection: "column", alignItems: "stretch" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+                        <div>
+                          <p className="report-title">{r.title}</p>
+                          <span className="report-date">
+                            {r.date}{r.generated_by ? ` · ${r.generated_by}` : ""}{r.disaster_type ? ` · ${r.disaster_type}` : ""}
+                          </span>
+                        </div>
+                        <span className={`activity-type type-${r.type === "situation" ? "alert" : r.type === "disaster_monitoring" ? "dispatch" : "report"}`}>
+                          {REPORT_TYPE_LABELS[r.type] || r.type}
+                        </span>
+                      </div>
+                      {isExpanded && <p className="panel-note" style={{ marginTop: "10px" }}>{r.content}</p>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </article>
           </section>
         )}
       </div>

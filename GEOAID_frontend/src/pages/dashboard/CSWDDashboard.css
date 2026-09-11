@@ -171,13 +171,15 @@
 }
 
 .donation-form-field input,
-.donation-form-field select {
+.donation-form-field select,
+.donation-form-field textarea {
     padding: 8px 12px;
     border-radius: 8px;
     border: 1px solid #d1d5db;
     font-size: 13px;
     color: #111827;
     background: #fff;
+    font-family: inherit;
 }
 
 .donation-form-actions {

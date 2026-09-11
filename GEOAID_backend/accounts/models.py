@@ -290,6 +290,37 @@ class Donation(models.Model):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
 
 
+class Report(models.Model):
+    """Matches the ERD's report entity (Table 3.24). Backs the
+    "Generate Report" use case shared by CSWD, Barangay Staff, and DRRM
+    Officers — each dashboard's Reports tab previously showed either a
+    hardcoded fake list or an honest "not available yet" placeholder;
+    this replaces both with real, staff-generated records."""
+
+    REPORT_TYPE_CHOICES = [
+        ("relief_vulnerability", "Relief & Vulnerability"),
+        ("situation", "Situation"),
+        ("disaster_monitoring", "Disaster Monitoring"),
+    ]
+
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    )
+    generated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    )
+    report_type = models.CharField(max_length=25, choices=REPORT_TYPE_CHOICES)
+    title = models.CharField(max_length=255)
+    content = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title
+
+
 class ReliefDistribution(models.Model):
     """Matches the ERD's relief_distribution entity — the beneficiary
     checklist Objective 4 calls for. One row = one relief release event

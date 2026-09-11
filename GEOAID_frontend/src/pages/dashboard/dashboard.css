@@ -737,3 +737,68 @@
         justify-content: center;
     }
 }
+/* --- Relief Distribution form + priority badges (ported from
+   CSWDDashboard.css so this page's new Relief Distribution tab matches
+   the styling of the equivalent CSWD tab) --- */
+.donation-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.donation-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.donation-form-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+}
+
+.donation-form-field input,
+.donation-form-field select,
+.donation-form-field textarea {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #d1d5db;
+    font-size: 13px;
+    color: #111827;
+    background: #fff;
+    font-family: inherit;
+}
+
+.donation-form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.donation-form-error {
+    grid-column: 1 / -1;
+    color: #b91c1c;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.priority-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.priority-high { background: #fee2e2; color: #b91c1c; }
+.priority-medium { background: #fef3c7; color: #b45309; }
+.priority-low { background: #e2e8f0; color: #475569; }
+
+/* Nested per-household attendance history table (Attendance tab) */
+.data-table td .data-table {
+    margin: 6px 0;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}

@@ -4,6 +4,7 @@ from .views import (
     cswd_dashboard,
     cswd_add_donation,
     cswd_record_relief,
+    generate_report,
     drrm_dashboard,
     barangay_dashboard,
     barangay_confirm_household,
@@ -20,6 +21,7 @@ from .views import (
 
 urlpatterns = [
     path('login/', login_user, name='login'),
+    path("reports/generate/", generate_report),
     path("cswd/dashboard/", cswd_dashboard),
     path("cswd/donations/add/", cswd_add_donation),
     path("cswd/relief/record/", cswd_record_relief),
@@ -27,6 +29,7 @@ urlpatterns = [
     path("barangay/dashboard/", barangay_dashboard),
     path("barangay/households/<str:household_code>/confirm/", barangay_confirm_household),
     path("barangay/evacuation/dashboard/", barangay_evacuation_dashboard),
+    path("barangay/relief/record/", cswd_record_relief),
     path("barangay/attendance/scan/", attendance_scan),
     path("purok/dashboard/", purok_dashboard),
     path("purok/households/<str:household_code>/review/", purok_review_household),

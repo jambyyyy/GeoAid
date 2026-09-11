@@ -719,3 +719,95 @@
     font-weight: 700;
     color: #111827;
 }
+
+/* --- Generate Report form + reports list (ported from
+   CSWDDashboard.css so DRRM's new Reports tab matches the other
+   dashboards' styling) --- */
+.donation-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.donation-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.donation-form-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+}
+
+.donation-form-field input,
+.donation-form-field select,
+.donation-form-field textarea {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #d1d5db;
+    font-size: 13px;
+    color: #111827;
+    background: #fff;
+    font-family: inherit;
+}
+
+.donation-form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.donation-form-error {
+    grid-column: 1 / -1;
+    color: #b91c1c;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.activity-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.type-alert { background: #fee2e2; color: #b91c1c; }
+.type-dispatch { background: #dbeafe; color: #1d4ed8; }
+.type-update { background: #fef3c7; color: #b45309; }
+.type-report { background: #d1fae5; color: #047857; }
+
+.reports-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.reports-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.reports-list li:last-child {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.report-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.report-date {
+    font-size: 12px;
+    color: #64748b;
+}

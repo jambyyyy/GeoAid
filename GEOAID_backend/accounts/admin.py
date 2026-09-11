@@ -9,6 +9,7 @@ from .models import (
     DisasterType,
     Donation,
     ReliefDistribution,
+    Report,
 )
 
 
@@ -100,3 +101,10 @@ class ReliefDistributionAdmin(admin.ModelAdmin):
     list_display = ("household", "goods_type", "quantity", "distributed_by", "distributed_at", "disaster_type")
     list_filter = ("disaster_type",)
     search_fields = ("household__full_name", "household__household_code", "goods_type", "distributed_by")
+
+
+@admin.register(Report)
+class ReportAdmin(admin.ModelAdmin):
+    list_display = ("title", "report_type", "generated_by", "disaster_type", "created_at")
+    list_filter = ("report_type", "disaster_type")
+    search_fields = ("title", "content")
