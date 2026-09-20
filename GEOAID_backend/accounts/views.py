@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
-from django.db.models import Count, Q
+from django.db import transaction
+from django.db.models import Count, Q, ProtectedError, RestrictedError
 from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -9,7 +10,7 @@ from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay, ReliefDistribution
+from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay, EvacuationRoute
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -221,18 +222,6 @@ def _serialize_households(households_qs):
     ):
         present_by_household.setdefault(a.household_id, []).append(a)
 
-    # Same one-query-then-group approach for relief distribution records,
-    # replacing the old hardcoded "every household is Registered" mock.
-    # Ordered -distributed_at (see ReliefDistribution.Meta) so [0] below
-    # is always the most recent release for that household.
-    relief_by_household = {}
-    for r in (
-        ReliefDistribution.objects
-        .filter(household_id__in=household_ids)
-        .select_related("disaster_type")
-    ):
-        relief_by_household.setdefault(r.household_id, []).append(r)
-
     households = []
     for h in households_list:
         flags = set()
@@ -282,9 +271,6 @@ def _serialize_households(households_qs):
         checked_in_center = present_records[0].evacuation_center.name if present_records else None
         checked_in_members = [a.family_member.full_name for a in present_records]
 
-        relief_records = relief_by_household.get(h.id, [])
-        latest_relief = relief_records[0] if relief_records else None
-
         households.append({
             "id": h.household_code,
             "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
@@ -302,11 +288,6 @@ def _serialize_households(households_qs):
             "checked_in": checked_in,
             "checked_in_center": checked_in_center,
             "checked_in_members": checked_in_members,
-            "relief_status": "Relief Given" if relief_records else "Registered",
-            "relief_count": len(relief_records),
-            "relief_last_goods": latest_relief.goods_type if latest_relief else None,
-            "relief_last_quantity": latest_relief.quantity if latest_relief else None,
-            "relief_last_date": _format_ph(latest_relief.distributed_at, "%b %d, %Y") if latest_relief else None,
         })
 
     return households
@@ -326,100 +307,14 @@ def _priority_beneficiary_counts(households_qs):
     }
 
 
-def _serialize_reports(limit=20):
-    """Most recent Report rows, shaped to match what the CSWD/Barangay/
-    DRRM Reports tabs already render (title/type/date), plus the full
-    content and who generated it. Shared across dashboards the same way
-    _serialize_households is — every role sees the same underlying
-    report list rather than a role-specific copy, since reports aren't
-    scoped to a barangay or role in the ERD (Table 3.24)."""
-
-    from .models import Report
-
-    return [
-        {
-            "id": r.id,
-            "title": r.title,
-            "type": r.report_type,
-            "content": r.content,
-            "date": _format_ph(r.created_at, "%b %d, %Y"),
-            "disaster_type": r.disaster_type.disaster_type_name if r.disaster_type else "",
-            "generated_by": r.generated_by.username if r.generated_by else "",
-        }
-        for r in Report.objects.select_related("disaster_type", "generated_by").order_by("-created_at")[:limit]
-    ]
-
-
-@csrf_exempt
-def generate_report(request):
-    """Lets any staff dashboard (CSWD, Barangay, DRRM) create a Report
-    row from its Reports tab's "Generate Report" form. Not scoped to a
-    role or barangay — matches the ERD, where a report just records
-    which user generated it (generated_by), not which role."""
-
-    if request.method == "OPTIONS":
-        return _cors_preflight()
-
-    if request.method != "POST":
-        return JsonResponse({"message": "POST required."}, status=405)
-
-    from .models import Report, DisasterType
-
-    try:
-        payload = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"message": "Invalid JSON body."}, status=400)
-
-    report_type = (payload.get("report_type") or "").strip()
-    title = (payload.get("title") or "").strip()
-    content = (payload.get("content") or "").strip()
-
-    valid_types = dict(Report.REPORT_TYPE_CHOICES)
-    if report_type not in valid_types:
-        return JsonResponse({"message": f"report_type must be one of: {', '.join(valid_types)}."}, status=400)
-    if not title or not content:
-        return JsonResponse({"message": "Title and content are required."}, status=400)
-
-    disaster_type = None
-    disaster_type_id = payload.get("disaster_type_id")
-    if disaster_type_id:
-        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
-        if not disaster_type:
-            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
-
-    username = (payload.get("username") or "").strip()
-    generated_by = User.objects.filter(username=username).first() if username else None
-
-    report = Report.objects.create(
-        report_type=report_type,
-        title=title,
-        content=content,
-        disaster_type=disaster_type,
-        generated_by=generated_by,
-    )
-
-    return JsonResponse({
-        "success": True,
-        "report": {
-            "id": report.id,
-            "title": report.title,
-            "type": report.report_type,
-            "content": report.content,
-            "date": _format_ph(report.created_at, "%b %d, %Y"),
-            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
-            "generated_by": generated_by.username if generated_by else "",
-        },
-    })
-
-
 @csrf_exempt
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
     Purok President -> Barangay Staff review chain (status='confirmed').
-    Relief distribution is backed by the ReliefDistribution model (see
-    cswd_record_relief below for how CSWD logs a release). Donations are
-    backed by the Donation model (CSWD logs each drop-off themselves from
-    the Donations tab — see cswd_add_donation below)."""
+    Relief distribution doesn't have a backing model yet, so that stays
+    a clearly-labeled placeholder until that feature exists. Donations
+    are now backed by the Donation model (CSWD logs each drop-off
+    themselves from the Donations tab — see cswd_add_donation below)."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -440,34 +335,17 @@ def cswd_dashboard(request):
         | Q(is_four_ps=True)
     ).distinct().count()
 
-    # Serialized once here (instead of again at the bottom of this
-    # function) so the per-barangay relief summary below and the
-    # per-household "households" list in the response both come from
-    # the exact same relief data — no risk of the two disagreeing.
-    serialized_households = _serialize_households(confirmed_qs)
-
-    relief_by_barangay = {}
-    for h in serialized_households:
-        entry = relief_by_barangay.setdefault(
-            h["barangay"], {"barangay": h["barangay"], "families": 0, "given": 0}
-        )
-        entry["families"] += 1
-        if h["relief_status"] == "Relief Given":
-            entry["given"] += 1
-
-    relief_distribution = []
-    for entry in sorted(relief_by_barangay.values(), key=lambda e: -e["families"]):
-        if entry["given"] == 0:
-            status = "Registered"
-        elif entry["given"] == entry["families"]:
-            status = "Relief Given"
-        else:
-            status = "Partial"
-        relief_distribution.append({
-            "barangay": entry["barangay"] or "Unspecified",
-            "families": entry["families"],
-            "status": status,
-        })
+    relief_distribution = [
+        {
+            "barangay": row["barangay"] or "Unspecified",
+            "families": row["total"],
+            # TODO: replace with a real ReliefDistribution model; for now
+            # every confirmed household is just "Registered" and awaiting
+            # an actual relief-goods disbursement record.
+            "status": "Registered",
+        }
+        for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
+    ]
 
     from .models import DisasterType
 
@@ -494,7 +372,9 @@ def cswd_dashboard(request):
     data = {
         "total_households": confirmed_qs.count(),
         "priority_cases": priority_cases,
-        "relief_released": ReliefDistribution.objects.filter(household__in=confirmed_qs).count(),
+        # TODO: relief_released needs a real ReliefDistribution model —
+        # no such data exists yet.
+        "relief_released": 0,
         "donations": donations_qs.count(),
 
         "relief_distribution": relief_distribution,
@@ -518,79 +398,10 @@ def cswd_dashboard(request):
             for c in EvacuationCenter.objects.all().order_by("barangay", "name")
         ],
 
-        "households": serialized_households,
-        "reports": _serialize_reports(),
+        "households": _serialize_households(confirmed_qs),
     }
 
     return JsonResponse(data)
-
-
-@csrf_exempt
-def cswd_record_relief(request):
-    """Lets CSWD staff log a relief release for a specific household from
-    the Relief Distribution tab. This is the write side of the
-    beneficiary checklist Objective 4 asks for — each call creates one
-    ReliefDistribution row, so a household's relief_status flips from
-    "Registered" to "Relief Given" the next time the dashboard is
-    fetched (see _serialize_households above)."""
-
-    if request.method == "OPTIONS":
-        return _cors_preflight()
-
-    if request.method != "POST":
-        return JsonResponse({"message": "POST required."}, status=405)
-
-    try:
-        payload = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"message": "Invalid JSON body."}, status=400)
-
-    household_code = (payload.get("household_code") or "").strip()
-    goods_type = (payload.get("goods_type") or "").strip()
-    quantity = payload.get("quantity")
-
-    if not household_code or not goods_type:
-        return JsonResponse({"message": "Household and goods type are required."}, status=400)
-
-    household = Household.objects.filter(household_code=household_code).first()
-    if not household:
-        return JsonResponse({"message": "Household not found."}, status=404)
-
-    try:
-        quantity = int(quantity)
-        if quantity < 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        return JsonResponse({"message": "Quantity must be a non-negative number."}, status=400)
-
-    disaster_type = None
-    disaster_type_id = payload.get("disaster_type_id")
-    if disaster_type_id:
-        from .models import DisasterType
-        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
-        if not disaster_type:
-            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
-
-    relief = ReliefDistribution.objects.create(
-        household=household,
-        goods_type=goods_type,
-        quantity=quantity,
-        disaster_type=disaster_type,
-        distributed_by=(payload.get("username") or "").strip(),
-        remarks=(payload.get("remarks") or "").strip(),
-    )
-
-    return JsonResponse({
-        "success": True,
-        "relief": {
-            "id": relief.id,
-            "household_code": household.household_code,
-            "goods_type": relief.goods_type,
-            "quantity": relief.quantity,
-            "distributed_at": relief.distributed_at.strftime("%b %d, %Y"),
-            "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
-        },
-    })
 
 
 @csrf_exempt
@@ -696,8 +507,6 @@ def drrm_dashboard(request):
         for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
     ]
 
-    from .models import DisasterType
-
     data = {
         "total_households": confirmed_qs.count(),
         "pending_review": all_qs.filter(status="pending").count(),
@@ -706,14 +515,743 @@ def drrm_dashboard(request):
         "priority_beneficiaries": _priority_beneficiary_counts(confirmed_qs),
         "barangay_breakdown": barangay_breakdown,
         "households": _serialize_households(confirmed_qs),
-        "reports": _serialize_reports(),
-        "disaster_types": [
-            {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
-            for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
-        ],
     }
 
     return JsonResponse(data)
+
+
+def _serialize_route(r):
+    return {
+        "id": r.id,
+        "evacuation_center_id": r.evacuation_center_id,
+        "evacuation_center_name": r.evacuation_center.name,
+        "barangay": r.evacuation_center.barangay,
+        "start_location": r.start_location,
+        "route_distance": r.route_distance,
+        "estimated_time": r.estimated_time,
+        "road_condition": r.road_condition,
+        "route_status": r.route_status,
+        "pinned_at": _format_ph(r.created_at, "%b %d, %Y %I:%M %p"),
+    }
+
+
+@csrf_exempt
+def drrm_routes(request):
+    """GET: evacuation centers (for the 'pin a route' form's dropdown)
+    plus every existing route, city-wide — DRRM Officers aren't scoped
+    to one barangay (see drrm_dashboard above).
+    POST: pin a new route to a center."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+        center_id = payload.get("evacuation_center_id")
+        start_location = (payload.get("start_location") or "").strip()
+        route_distance = (payload.get("route_distance") or "").strip()
+        estimated_time = (payload.get("estimated_time") or "").strip()
+        road_condition = (payload.get("road_condition") or "clear").strip()
+        route_status = (payload.get("route_status") or "active").strip()
+
+        if not center_id or not start_location:
+            return JsonResponse(
+                {"message": "Evacuation center and start location are required."}, status=400
+            )
+
+        try:
+            center = EvacuationCenter.objects.get(id=center_id)
+        except EvacuationCenter.DoesNotExist:
+            return JsonResponse({"message": "Evacuation center not found."}, status=404)
+
+        valid_conditions = dict(EvacuationRoute.ROAD_CONDITION_CHOICES)
+        if road_condition not in valid_conditions:
+            return JsonResponse(
+                {"message": f"road_condition must be one of: {', '.join(valid_conditions)}."}, status=400
+            )
+
+        valid_statuses = dict(EvacuationRoute.ROUTE_STATUS_CHOICES)
+        if route_status not in valid_statuses:
+            return JsonResponse(
+                {"message": f"route_status must be one of: {', '.join(valid_statuses)}."}, status=400
+            )
+
+        route = EvacuationRoute.objects.create(
+            evacuation_center=center,
+            start_location=start_location,
+            route_distance=route_distance,
+            estimated_time=estimated_time,
+            road_condition=road_condition,
+            route_status=route_status,
+        )
+
+        return JsonResponse({"success": True, "route": _serialize_route(route)}, status=201)
+
+    if request.method != "GET":
+        return JsonResponse({"message": "GET or POST required."}, status=405)
+
+    centers = [
+        {"id": c.id, "name": c.name, "barangay": c.barangay}
+        for c in EvacuationCenter.objects.all().order_by("barangay", "name")
+    ]
+    routes = [
+        _serialize_route(r)
+        for r in EvacuationRoute.objects.select_related("evacuation_center").all()
+    ]
+
+    return JsonResponse({"centers": centers, "routes": routes})
+
+
+def _serialize_disaster_type(dt):
+    """One disaster situation. Dates are ISO (YYYY-MM-DD) so the edit form's
+    <input type="date"> can use them directly. `donations` / `attendance`
+    count the records tied to it (they decide whether it can be deleted)."""
+    return {
+        "id": dt.id,
+        "name": dt.disaster_type_name,
+        "status": dt.status,
+        "start_date": dt.start_date.isoformat() if dt.start_date else "",
+        "end_date": dt.end_date.isoformat() if dt.end_date else "",
+        "donations": dt.donations.count(),
+        "attendance": dt.attendance_records.count(),
+    }
+
+
+@csrf_exempt
+def drrm_disaster_types(request):
+    """GET: barangays + disaster types (dropdown data for the DRRM
+    Disaster Situation and Routes tabs)."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "GET":
+        return JsonResponse({"message": "GET required."}, status=405)
+
+    from .models import DisasterType
+
+    return JsonResponse({
+        "barangays": list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)),
+        "disaster_types": [
+            _serialize_disaster_type(dt)
+            for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
+        ],
+    })
+
+
+@csrf_exempt
+def drrm_add_disaster_type(request):
+    """POST: add a new disaster situation (DisasterType row) from the
+    'Disaster Situations' sub-panel of the Disaster Location Info tab.
+    Matches Process 3.2 (Disaster Situation) in the thesis DFD."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    from .models import DisasterType
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    name = (payload.get("disaster_type_name") or "").strip()
+    if not name:
+        return JsonResponse({"message": "Disaster name is required."}, status=400)
+
+    status = (payload.get("status") or "active").strip()
+    valid_statuses = dict(DisasterType.STATUS_CHOICES)
+    if status not in valid_statuses:
+        return JsonResponse({"message": f"Status must be one of: {', '.join(valid_statuses)}."}, status=400)
+
+    start_date_raw = payload.get("start_date")
+    end_date_raw = payload.get("end_date")
+    start_date = parse_date(start_date_raw) if start_date_raw else None
+    end_date = parse_date(end_date_raw) if end_date_raw else None
+
+    dt = DisasterType.objects.create(
+        disaster_type_name=name,
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+    )
+    return JsonResponse({"success": True, "disaster_type": _serialize_disaster_type(dt)}, status=201)
+
+
+@csrf_exempt
+def drrm_update_disaster_type(request):
+    """POST {id, disaster_type_name?, start_date?, end_date?, status?}:
+    DRRM edits a disaster situation. Send only the fields that changed; an
+    empty date string clears that date."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    from .models import DisasterType
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "message": "Invalid JSON body."}, status=400)
+
+    try:
+        dt = DisasterType.objects.get(id=payload.get("id"))
+    except (DisasterType.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({"success": False, "message": "Disaster situation not found."}, status=404)
+
+    if "disaster_type_name" in payload:
+        name = (payload.get("disaster_type_name") or "").strip()
+        if not name:
+            return JsonResponse({"success": False, "message": "Disaster name is required."}, status=400)
+        if len(name) > 100:
+            return JsonResponse({"success": False, "message": "Disaster name must be 100 characters or fewer."}, status=400)
+        dt.disaster_type_name = name
+
+    if "status" in payload:
+        status = (payload.get("status") or "").strip()
+        valid = dict(DisasterType.STATUS_CHOICES)
+        if status not in valid:
+            return JsonResponse(
+                {"success": False, "message": f"Status must be one of: {', '.join(valid)}."}, status=400
+            )
+        dt.status = status
+
+    for field, label in (("start_date", "Start date"), ("end_date", "End date")):
+        if field in payload:
+            raw = payload.get(field)
+            if not raw:
+                setattr(dt, field, None)
+                continue
+            try:
+                parsed = parse_date(str(raw))
+            except ValueError:
+                parsed = None
+            if parsed is None:
+                return JsonResponse({"success": False, "message": f"{label} must be a valid date (YYYY-MM-DD)."}, status=400)
+            setattr(dt, field, parsed)
+
+    if dt.start_date and dt.end_date and dt.end_date < dt.start_date:
+        return JsonResponse({"success": False, "message": "End date can't be before the start date."}, status=400)
+
+    dt.save()
+    return JsonResponse({"success": True, "disaster_type": _serialize_disaster_type(dt)})
+
+
+@csrf_exempt
+def drrm_delete_disaster_type(request):
+    """POST {id}: DRRM removes a disaster situation.
+
+    Donations and evacuee attendance records point at disaster situations
+    (and would silently lose their label if it were deleted), so a situation
+    that already has records is refused -- set it to 'closed' instead."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    from .models import DisasterType
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "message": "Invalid JSON body."}, status=400)
+
+    try:
+        dt = DisasterType.objects.get(id=payload.get("id"))
+    except (DisasterType.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({"success": False, "message": "Disaster situation not found."}, status=404)
+
+    donations, attendance = dt.donations.count(), dt.attendance_records.count()
+    if donations or attendance:
+        parts = []
+        if donations:
+            parts.append(f"{donations} donation{'s' if donations != 1 else ''}")
+        if attendance:
+            parts.append(f"{attendance} attendance record{'s' if attendance != 1 else ''}")
+        return JsonResponse(
+            {
+                "success": False,
+                "message": (
+                    f"\"{dt.disaster_type_name}\" is linked to {' and '.join(parts)} and can't be deleted. "
+                    "Set its status to closed instead."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        dt.delete()
+    except (ProtectedError, RestrictedError):
+        return JsonResponse(
+            {"success": False, "message": "This disaster situation is still referenced by other records and can't be deleted."},
+            status=409,
+        )
+
+    return JsonResponse({"success": True})
+
+
+@csrf_exempt
+def drrm_update_route(request):
+    """POST {id, route_status?, road_condition?}: DRRM edits a pinned
+    route. route_status is also the route's risk level (safe / low /
+    medium / high / critical), which drives the shaded risk areas on the
+    map. Send either field or both."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    try:
+        route = EvacuationRoute.objects.select_related("evacuation_center").get(id=payload.get("id"))
+    except (EvacuationRoute.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({"success": False, "message": "Route not found."}, status=404)
+
+    if "route_status" not in payload and "road_condition" not in payload:
+        return JsonResponse(
+            {"success": False, "message": "Provide route_status and/or road_condition."}, status=400
+        )
+
+    if "route_status" in payload:
+        route_status = (payload.get("route_status") or "").strip()
+        valid = dict(EvacuationRoute.ROUTE_STATUS_CHOICES)
+        if route_status not in valid:
+            return JsonResponse(
+                {"success": False, "message": f"route_status must be one of: {', '.join(valid)}."},
+                status=400,
+            )
+        route.route_status = route_status
+
+    if "road_condition" in payload:
+        road_condition = (payload.get("road_condition") or "").strip()
+        valid = dict(EvacuationRoute.ROAD_CONDITION_CHOICES)
+        if road_condition not in valid:
+            return JsonResponse(
+                {"success": False, "message": f"road_condition must be one of: {', '.join(valid)}."},
+                status=400,
+            )
+        route.road_condition = road_condition
+
+    route.save()
+    return JsonResponse({"success": True, "route": _serialize_route(route)})
+
+
+# ---------------------------------------------------------------------------
+# DRRM Evacuation Map — evacuation centers and route risk levels
+# ---------------------------------------------------------------------------
+
+RISK_ORDER = {"safe": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _center_eligibility(center):
+    """(usable, reason) — a closed or full center is shown on the map but
+    is never *recommended* as the destination."""
+    if center.status != "open":
+        return False, "Center is closed"
+    if center.capacity and center.current_occupancy >= center.capacity:
+        return False, "Center is full"
+    return True, ""
+
+
+def _highest_risk_by_barangay():
+    """{barangay name (lowercase): 'low'|'medium'|'high'|'critical'}, taken
+    from pinned routes' route_status. A route counts toward the barangay
+    named in its start_location; 'safe' and the non-risk statuses (active,
+    under_review, blocked) never register as a risk."""
+    names = {n.strip().lower() for n in Barangay.objects.values_list("barangay_name", flat=True)}
+    result = {}
+    for start, status in EvacuationRoute.objects.values_list("start_location", "route_status"):
+        key = (start or "").strip().lower()
+        if key not in names:
+            continue
+        if RISK_ORDER.get(status, 0) > RISK_ORDER.get(result.get(key, ""), 0):
+            result[key] = status
+    return result
+
+
+@csrf_exempt
+def drrm_delete_evacuation_center(request):
+    """POST {id}: DRRM removes an evacuation center from the map.
+
+    Saved routes pointing at the center are deleted with it (a route to a
+    center that no longer exists is meaningless). If evacuees have already
+    been checked in there, the delete is refused so attendance history isn't
+    wiped -- set the center to 'closed' instead."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    try:
+        center = EvacuationCenter.objects.get(id=payload.get("id"))
+    except (EvacuationCenter.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({"success": False, "message": "Evacuation center not found."}, status=404)
+
+    if Attendance.objects.filter(evacuation_center=center).exists():
+        return JsonResponse(
+            {
+                "success": False,
+                "message": (
+                    f"\"{center.name}\" has evacuee attendance records and can't be deleted. "
+                    "Set its status to closed instead."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        with transaction.atomic():
+            EvacuationRoute.objects.filter(evacuation_center=center).delete()
+            center.delete()
+    except (ProtectedError, RestrictedError):
+        return JsonResponse(
+            {"success": False, "message": "This center is still referenced by other records and can't be deleted."},
+            status=409,
+        )
+
+    return JsonResponse({"success": True})
+
+
+@csrf_exempt
+def drrm_map(request):
+    """GET: everything the DRRM evacuation map draws — barangays, evacuation
+    centers and route risk levels — plus a list of what's still missing
+    coordinates so the UI can tell the officer what to fill in."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "GET":
+        return JsonResponse({"message": "GET required."}, status=405)
+
+    risk_levels = _highest_risk_by_barangay()
+    household_counts = {
+        (row["barangay"] or "").strip().lower(): row["total"]
+        for row in Household.objects.filter(registration_complete=True, status="confirmed")
+        .values("barangay").annotate(total=Count("id"))
+    }
+
+    all_barangays = list(Barangay.objects.order_by("barangay_name"))
+    located = [b for b in all_barangays if None not in (b.latitude, b.longitude)]
+    by_name = {b.barangay_name.strip().lower(): b for b in located}
+
+    barangays = [
+        {
+            "id": b.id,
+            "name": b.barangay_name,
+            "latitude": b.latitude,
+            "longitude": b.longitude,
+            "risk_level": risk_levels.get(b.barangay_name.strip().lower(), ""),
+            "households": household_counts.get(b.barangay_name.strip().lower(), 0),
+        }
+        for b in located
+    ]
+
+    centers, centers_missing = [], []
+    for c in EvacuationCenter.objects.order_by("barangay", "name"):
+        home = by_name.get((c.barangay or "").strip().lower())
+        exact = None not in (c.latitude, c.longitude)
+        if not exact and not home:
+            centers_missing.append(c.name)
+            continue
+        usable, reason = _center_eligibility(c)
+        centers.append({
+            "id": c.id,
+            "name": c.name,
+            "barangay": c.barangay,
+            "latitude": c.latitude if exact else home.latitude,
+            "longitude": c.longitude if exact else home.longitude,
+            "approximate": not exact,
+            "capacity": c.capacity,
+            "occupancy": c.current_occupancy,
+            "status": c.status,
+            "eligible": usable,
+            "ineligible_reason": reason,
+        })
+
+    # Risk areas come from pinned routes: a route whose route_status is a
+    # risk level (safe .. critical) is drawn at the barangay it starts from.
+    risk_areas = []
+    for r in EvacuationRoute.objects.select_related("evacuation_center"):
+        if r.route_status not in RISK_ORDER:
+            continue
+        home = by_name.get((r.start_location or "").strip().lower())
+        if not home:
+            continue
+        risk_areas.append({
+            "id": r.id,
+            "barangay": home.barangay_name,
+            "latitude": home.latitude,
+            "longitude": home.longitude,
+            "risk_level": r.route_status,
+            "road_condition": r.road_condition,
+            "disaster_type": "",
+            "description": f"Route to {r.evacuation_center.name}",
+        })
+
+    return JsonResponse({
+        "barangays": barangays,
+        "centers": centers,
+        "risk_areas": risk_areas,
+        "missing_coordinates": {
+            "barangays": [b.barangay_name for b in all_barangays if None in (b.latitude, b.longitude)],
+            "centers": centers_missing,
+        },
+        "total_barangays": len(all_barangays),
+    })
+
+
+def _haversine_km(lat1, lng1, lat2, lng2):
+    from math import radians, sin, cos, asin, sqrt
+    p1, p2 = radians(lat1), radians(lat2)
+    a = sin((p2 - p1) / 2) ** 2 + cos(p1) * cos(p2) * sin(radians(lng2 - lng1) / 2) ** 2
+    return 2 * 6371.0088 * asin(sqrt(a))
+
+
+@csrf_exempt
+def drrm_set_risk_area(request):
+    """POST {barangay, risk_level, road_condition?}: DRRM flags a barangay
+    as a risk area from the evacuation map.
+
+    risk_level is one of safe / low / medium / high / critical, or "none" to
+    clear the flag. The change is applied to the pinned routes that start in
+    that barangay, so the risk level (route_status) AND the road condition
+    update together and the map redraws the shaded circle:
+
+      * routes already start there  -> all of them are updated;
+      * none do yet                 -> one route is created from the barangay
+        to the nearest evacuation center, since the risk level lives on a
+        route (see EvacuationRoute.route_status).
+
+    "none" puts those routes back to route_status "active" and road_condition
+    "clear", which removes the circle.
+    """
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "message": "Invalid JSON body."}, status=400)
+
+    barangay_name = (payload.get("barangay") or "").strip()
+    risk_level = (payload.get("risk_level") or "").strip()
+    road_condition = (payload.get("road_condition") or "").strip()
+
+    if not barangay_name:
+        return JsonResponse({"success": False, "message": "Barangay is required."}, status=400)
+
+    barangay = next(
+        (b for b in Barangay.objects.all() if b.barangay_name.strip().lower() == barangay_name.lower()),
+        None,
+    )
+    if barangay is None:
+        return JsonResponse({"success": False, "message": f"'{barangay_name}' isn't in the Barangay table."}, status=404)
+
+    clearing = risk_level == "none"
+    if not clearing and risk_level not in RISK_ORDER:
+        return JsonResponse(
+            {"success": False, "message": f"risk_level must be one of: {', '.join(RISK_ORDER)}, none."},
+            status=400,
+        )
+
+    valid_conditions = dict(EvacuationRoute.ROAD_CONDITION_CHOICES)
+    if clearing:
+        road_condition = "clear"
+    else:
+        road_condition = road_condition or "clear"
+        if road_condition not in valid_conditions:
+            return JsonResponse(
+                {"success": False, "message": f"road_condition must be one of: {', '.join(valid_conditions)}."},
+                status=400,
+            )
+
+    key = barangay.barangay_name.strip().lower()
+    routes = [
+        r for r in EvacuationRoute.objects.select_related("evacuation_center")
+        if (r.start_location or "").strip().lower() == key
+    ]
+
+    with transaction.atomic():
+        if clearing:
+            for r in routes:
+                if r.route_status in RISK_ORDER:  # leave active / under_review / blocked alone
+                    r.route_status = "active"
+                r.road_condition = "clear"
+                r.save(update_fields=["route_status", "road_condition"])
+            return JsonResponse({
+                "success": True,
+                "barangay": barangay.barangay_name,
+                "risk_level": "none",
+                "road_condition": "clear",
+                "routes_updated": len(routes),
+                "route_created": False,
+            })
+
+        if routes:
+            for r in routes:
+                r.route_status = risk_level
+                r.road_condition = road_condition
+                r.save(update_fields=["route_status", "road_condition"])
+            return JsonResponse({
+                "success": True,
+                "barangay": barangay.barangay_name,
+                "risk_level": risk_level,
+                "road_condition": road_condition,
+                "routes_updated": len(routes),
+                "route_created": False,
+            })
+
+        # No route starts here yet: create one to the nearest evacuation center.
+        centers = list(EvacuationCenter.objects.all())
+        if not centers:
+            return JsonResponse(
+                {"success": False, "message": "Register an evacuation center first — a risk area is stored on a route to a center."},
+                status=400,
+            )
+
+        def center_point(c):
+            if None not in (c.latitude, c.longitude):
+                return c.latitude, c.longitude
+            if (c.barangay or "").strip().lower() == key and None not in (barangay.latitude, barangay.longitude):
+                return barangay.latitude, barangay.longitude
+            return None
+
+        def distance_to(c):
+            pt = center_point(c)
+            if pt is None or None in (barangay.latitude, barangay.longitude):
+                return float("inf")
+            return _haversine_km(barangay.latitude, barangay.longitude, pt[0], pt[1])
+
+        # Prefer a center in the same barangay, then the nearest open one, then the nearest.
+        same = [c for c in centers if (c.barangay or "").strip().lower() == key]
+        pool = same or [c for c in centers if c.status == "open"] or centers
+        target = min(pool, key=distance_to)
+
+        route_kwargs = {}
+        km = distance_to(target)
+        if km != float("inf"):
+            road_km = km * 1.3  # straight line -> rough road length
+            route_kwargs["route_distance"] = f"{road_km:.1f} km"
+            route_kwargs["estimated_time"] = f"{max(1, round(road_km / 25 * 60))} mins"
+
+        EvacuationRoute.objects.create(
+            evacuation_center=target,
+            start_location=barangay.barangay_name,
+            road_condition=road_condition,
+            route_status=risk_level,
+            **route_kwargs,
+        )
+
+    return JsonResponse({
+        "success": True,
+        "barangay": barangay.barangay_name,
+        "risk_level": risk_level,
+        "road_condition": road_condition,
+        "routes_updated": 0,
+        "route_created": True,
+        "center": target.name,
+    }, status=201)
+
+
+def _serialize_new_center(c):
+    """Matches the shape drrm_map() already returns per-center, so the
+    frontend's optimistic UI (and any code that reuses that shape) works
+    the same right after creation as it does after a page reload."""
+    usable, reason = _center_eligibility(c)
+    return {
+        "id": c.id,
+        "name": c.name,
+        "barangay": c.barangay,
+        "latitude": c.latitude,
+        "longitude": c.longitude,
+        "approximate": False,
+        "capacity": c.capacity,
+        "occupancy": c.current_occupancy,
+        "status": c.status,
+        "eligible": usable,
+        "ineligible_reason": reason,
+    }
+
+
+@csrf_exempt
+def drrm_add_evacuation_center(request):
+    """POST {name, barangay, latitude, longitude, capacity?, status?}:
+    DRRM pins a new evacuation center on the map. Matches the
+    EvacuationCenter model exactly — capacity defaults to 0 and status
+    defaults to 'open' if omitted, current_occupancy always starts at 0
+    for a brand-new center."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    name = (payload.get("name") or payload.get("center_name") or "").strip()
+    barangay = _match_barangay(payload.get("barangay"))
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    capacity = payload.get("capacity")
+    status = (payload.get("status") or "open").strip()
+
+    if not name:
+        return JsonResponse({"message": "Center name is required."}, status=400)
+    if not barangay:
+        return JsonResponse({"message": "A valid barangay is required."}, status=400)
+
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Click a location on the map to set the pin."}, status=400)
+
+    valid_statuses = dict(EvacuationCenter.STATUS_CHOICES)
+    if status not in valid_statuses:
+        return JsonResponse({"message": f"status must be one of: {', '.join(valid_statuses)}."}, status=400)
+
+    try:
+        capacity = int(capacity) if capacity not in (None, "") else 0
+        if capacity < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Capacity must be a non-negative whole number."}, status=400)
+
+    center = EvacuationCenter.objects.create(
+        name=name,
+        barangay=barangay,
+        latitude=latitude,
+        longitude=longitude,
+        capacity=capacity,
+        status=status,
+    )
+
+    return JsonResponse({"success": True, "center": _serialize_new_center(center)}, status=201)
 
 
 @csrf_exempt
@@ -754,8 +1292,6 @@ def barangay_dashboard(request):
         .order_by("-created_at")
     )
 
-    from .models import DisasterType
-
     data = {
         "barangay": valid_barangay,
         "total_households": households_qs.filter(status="confirmed").count(),
@@ -766,11 +1302,6 @@ def barangay_dashboard(request):
             barangay__iexact=valid_barangay,
         ).count(),
         "households": _serialize_households(households_qs),
-        "disaster_types": [
-            {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
-            for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
-        ],
-        "reports": _serialize_reports(),
     }
 
     return JsonResponse(data)
@@ -1120,6 +1651,48 @@ def purok_dashboard(request):
     if effective_purok:
         households_qs = households_qs.filter(purok__iexact=effective_purok)
 
+    households = []
+    for h in households_qs:
+        flags = set()
+        member_payload = []
+
+        for m in h.family_members.all():
+            tag = None
+            if m.is_pwd:
+                flags.add("PWD")
+                tag = f"PWD - {m.pwd_detail}" if m.pwd_detail else "PWD"
+            if m.is_pregnant:
+                flags.add("Pregnant")
+                tag = f"Pregnant - {m.pregnant_detail}" if m.pregnant_detail else "Pregnant"
+            if m.is_elderly:
+                flags.add("Elderly")
+            if m.is_child_under5:
+                flags.add("Child<5")
+
+            member_payload.append({
+                "name": m.full_name,
+                "relation": m.relation,
+                "age": m.age,
+                "tag": tag,
+            })
+
+        if h.is_four_ps:
+            flags.add("4Ps")
+
+        households.append({
+            "id": h.household_code,
+            "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
+            "flags": sorted(flags),
+            "address": h.address_line or "Address not provided",
+            "purok": h.purok or "—",
+            "barangay": h.barangay or "—",
+            "gps_lat": h.gps_lat,
+            "gps_lng": h.gps_lng,
+            "submitted": _format_ph(h.created_at, "%b %d, %Y · %I:%M %p"),
+            "status": h.status,
+            "members": member_payload,
+        })
+
     data = {
         "purok": effective_purok or "All Puroks",
         "barangay": valid_barangay,
@@ -1130,7 +1703,7 @@ def purok_dashboard(request):
             registration_complete=False,
             barangay__iexact=valid_barangay,
         ).count(),
-        "households": _serialize_households(households_qs),
+        "households": households,
     }
 
     return JsonResponse(data)

@@ -1,0 +1,376 @@
+/* Evacuation map — sits inside the DRRM dashboard, so it reuses that page's
+   .panel / .form-field / .form-error / .action-btn / .drrm-submit-btn rules
+   (DRRMDashboard.css) and only adds what the map needs. */
+
+.evac-map-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.evac-map-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 20px;
+    align-items: start;
+}
+
+.evac-map-stage {
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    overflow: hidden;
+}
+
+.evac-map-canvas {
+    width: 100%;
+    height: 620px;
+    background: #e2e8f0;
+    cursor: crosshair;
+}
+
+.evac-map-canvas .leaflet-interactive {
+    cursor: pointer;
+}
+
+/* --- legend --- */
+
+.evac-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    padding: 14px 18px;
+    border-top: 1px solid #e5e7eb;
+    font-size: 12px;
+    color: #475569;
+}
+
+.evac-legend-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+}
+
+.evac-legend-title {
+    font-weight: 700;
+    color: #334155;
+}
+
+.evac-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.evac-legend-line {
+    display: inline-block;
+    width: 18px;
+    height: 4px;
+    border-radius: 2px;
+}
+
+.evac-legend-line--route {
+    background: #2563eb;
+    height: 5px;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 3px #cbd5e1;
+}
+
+.evac-legend-dot {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px #cbd5e1;
+}
+
+.evac-legend-square {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+.evac-legend-square--ok { background: #059669; }
+.evac-legend-square--bad { background: #64748b; }
+
+/* --- map markers (Leaflet divIcons) --- */
+
+.evac-center-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 3px solid #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.35);
+}
+
+.evac-center-pin--ok { background: #059669; }
+.evac-center-pin--bad { background: #64748b; }
+
+/* white cross */
+.evac-center-pin span {
+    position: relative;
+    display: block;
+    width: 12px;
+    height: 12px;
+}
+
+.evac-center-pin span::before,
+.evac-center-pin span::after {
+    content: "";
+    position: absolute;
+    background: #fff;
+    border-radius: 1px;
+}
+
+.evac-center-pin span::before {
+    left: 4.5px;
+    top: 0;
+    width: 3px;
+    height: 12px;
+}
+
+.evac-center-pin span::after {
+    left: 0;
+    top: 4.5px;
+    width: 12px;
+    height: 3px;
+}
+
+.evac-start-pin {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #2563eb;
+    border: 4px solid #fff;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35), 0 2px 8px rgba(15, 23, 42, 0.35);
+}
+
+/* --- side panel --- */
+
+.evac-side {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.evac-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.evac-card h2 {
+    margin-bottom: 0;
+}
+
+.evac-hint {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.evac-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #334155;
+    cursor: pointer;
+}
+
+.evac-empty {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #64748b;
+}
+
+.evac-notice {
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.evac-notice--warn {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+}
+
+.evac-notice code {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(146, 64, 14, 0.1);
+    font-size: 12px;
+}
+
+/* --- route results --- */
+
+.evac-route-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.evac-route-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+    transition: 0.15s;
+}
+
+.evac-route-option:hover {
+    border-color: #93c5fd;
+}
+
+.evac-route-option.active {
+    border-color: #2563eb;
+    background: #eff6ff;
+}
+
+.evac-route-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.evac-route-meta {
+    flex-shrink: 0;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.evac-tag {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #d1fae5;
+    color: #047857;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.evac-tag--bad {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.evac-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.evac-summary-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.evac-summary-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.evac-summary-sub {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.evac-summary-figures {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.evac-summary-figures strong {
+    font-size: 20px;
+    color: #2563eb;
+}
+
+.evac-summary-figures span {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.evac-legs {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+    padding: 0 0 0 18px;
+    font-size: 13px;
+    color: #334155;
+}
+
+.evac-legs li {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.evac-legs li:last-child {
+    border-bottom: none;
+}
+
+.evac-leg-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.evac-leg-cond {
+    font-weight: 600;
+}
+
+.evac-footnote {
+    font-size: 11px;
+    line-height: 1.5;
+    color: #94a3b8;
+}
+
+.evac-road-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+@media (max-width: 1100px) {
+    .evac-map-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .evac-map-canvas {
+        height: 480px;
+    }
+}

@@ -1,0 +1,138 @@
+/* Risk areas sidebar card (RiskAreasPanel.jsx). Reuses the map page's
+   .panel / .evac-card / .form-field / .drrm-submit-btn rules and only adds
+   what's specific to this card. */
+
+.risk-level-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.risk-level-chip {
+    padding: 6px 11px;
+    border: 1px solid #d1d5db;
+    border-radius: 999px;
+    background: #fff;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.15s;
+}
+
+.risk-level-chip:hover:not(:disabled) {
+    border-color: #94a3b8;
+}
+
+.risk-level-chip.active {
+    color: #fff;
+}
+
+.risk-level-chip:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.risk-btn-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 8px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    vertical-align: -1px;
+}
+
+.risk-notice {
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #047857;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.risk-list-head {
+    margin-top: 6px;
+    padding-top: 14px;
+    border-top: 1px solid #e5e7eb;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+}
+
+.risk-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.risk-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.risk-row-dot {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25);
+}
+
+.risk-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.risk-row-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.risk-row-meta {
+    margin-top: 2px;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.risk-row-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 10px;
+}
+
+.risk-link-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.risk-link-btn:hover:not(:disabled) {
+    text-decoration: underline;
+}
+
+.risk-link-btn--danger {
+    color: #dc2626;
+}
+
+.risk-link-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

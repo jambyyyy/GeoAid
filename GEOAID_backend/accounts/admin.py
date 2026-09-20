@@ -8,8 +8,7 @@ from .models import (
     Barangay,
     DisasterType,
     Donation,
-    ReliefDistribution,
-    Report,
+    EvacuationRoute,
 )
 
 
@@ -63,7 +62,7 @@ class EvacuationCenterAdminForm(forms.ModelForm):
 @admin.register(EvacuationCenter)
 class EvacuationCenterAdmin(admin.ModelAdmin):
     form = EvacuationCenterAdminForm
-    list_display = ("name", "barangay", "current_occupancy", "capacity", "status")
+    list_display = ("name", "barangay", "current_occupancy", "capacity", "status", "latitude", "longitude")
     list_filter = ("barangay", "status")
     search_fields = ("name",)
 
@@ -78,7 +77,7 @@ class AttendanceAdmin(admin.ModelAdmin):
 
 @admin.register(Barangay)
 class BarangayAdmin(admin.ModelAdmin):
-    list_display = ("barangay_name",)
+    list_display = ("barangay_name", "latitude", "longitude")
     search_fields = ("barangay_name",)
 
 
@@ -95,16 +94,9 @@ class DonationAdmin(admin.ModelAdmin):
     list_filter = ("status", "disaster_type")
     search_fields = ("donor_name", "contact_num", "goods_type")
 
-
-@admin.register(ReliefDistribution)
-class ReliefDistributionAdmin(admin.ModelAdmin):
-    list_display = ("household", "goods_type", "quantity", "distributed_by", "distributed_at", "disaster_type")
-    list_filter = ("disaster_type",)
-    search_fields = ("household__full_name", "household__household_code", "goods_type", "distributed_by")
-
-
-@admin.register(Report)
-class ReportAdmin(admin.ModelAdmin):
-    list_display = ("title", "report_type", "generated_by", "disaster_type", "created_at")
-    list_filter = ("report_type", "disaster_type")
-    search_fields = ("title", "content")
+@admin.register(EvacuationRoute)
+class EvacuationRouteAdmin(admin.ModelAdmin):
+    list_display = ("start_location", "evacuation_center", "road_condition", "route_status", "created_at")
+    list_filter = ("road_condition", "route_status", "evacuation_center__barangay")
+    search_fields = ("start_location", "evacuation_center__name")
+    readonly_fields = ("created_at",)

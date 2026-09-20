@@ -15,6 +15,13 @@ class Barangay(models.Model):
     replacing the text fields outright."""
 
     barangay_name = models.CharField(max_length=50, unique=True)
+    # Centroid of the barangay — needed to draw it on the DRRM evacuation
+    # map and to use it as a node when routing (see routing.py). Nullable so
+    # existing rows keep working; barangays without coordinates are simply
+    # left off the map until you fill them in (Django admin > Barangays, or
+    # run `python manage.py seed_map_data`).
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
 
     class Meta:
         verbose_name_plural = "Barangays"
@@ -224,6 +231,11 @@ class EvacuationCenter(models.Model):
     capacity = models.PositiveIntegerField(default=0)
     current_occupancy = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="open")
+    # Exact location of the center for the evacuation map. If left blank
+    # the map falls back to the barangay's centroid (and flags it as
+    # approximate), so set these for accurate routes.
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.barangay})"
@@ -290,64 +302,47 @@ class Donation(models.Model):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
 
 
-class Report(models.Model):
-    """Matches the ERD's report entity (Table 3.24). Backs the
-    "Generate Report" use case shared by CSWD, Barangay Staff, and DRRM
-    Officers — each dashboard's Reports tab previously showed either a
-    hardcoded fake list or an honest "not available yet" placeholder;
-    this replaces both with real, staff-generated records."""
+class EvacuationRoute(models.Model):
+    """Matches the thesis ERD's evacuation_route entity — a route DRRM
+    Officers can pin to a specific EvacuationCenter, so residents/staff
+    know which road to use and its current condition during an
+    evacuation. route_distance and estimated_time are free text
+    ("2.4 km", "15 mins") rather than fixed numeric units, since exact
+    formats/units weren't specified and text keeps the form flexible."""
 
-    REPORT_TYPE_CHOICES = [
-        ("relief_vulnerability", "Relief & Vulnerability"),
-        ("situation", "Situation"),
-        ("disaster_monitoring", "Disaster Monitoring"),
+    ROAD_CONDITION_CHOICES = [
+        ("clear", "Clear"),
+        ("passable", "Passable"),
+        ("flooded", "Flooded"),
+        ("landslide_risk", "Landslide Risk"),
+        ("impassable", "Impassable"),
+    ]
+    # route_status doubles as the route's risk level (this replaced the old
+    # RiskArea table): "safe" .. "critical" say how dangerous the route is.
+    # A route counts toward the barangay named in start_location.
+    ROUTE_STATUS_CHOICES = [
+        ("active", "Active"),
+        ("under_review", "Under Review"),
+        ("blocked", "Blocked"),
+        ("safe", "Safe"),
+        ("low", "Low Risk"),
+        ("medium", "Medium Risk"),
+        ("high", "High Risk"),
+        ("critical", "Critical Risk"),
     ]
 
-    disaster_type = models.ForeignKey(
-        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    evacuation_center = models.ForeignKey(
+        EvacuationCenter, on_delete=models.CASCADE, related_name="evacuation_routes"
     )
-    generated_by = models.ForeignKey(
-        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
-    )
-    report_type = models.CharField(max_length=25, choices=REPORT_TYPE_CHOICES)
-    title = models.CharField(max_length=255)
-    content = models.TextField()
-    created_at = models.DateTimeField(default=timezone.now)
+    start_location = models.CharField(max_length=255)
+    route_distance = models.CharField(max_length=50, blank=True)
+    estimated_time = models.CharField(max_length=50, blank=True)
+    road_condition = models.CharField(max_length=20, choices=ROAD_CONDITION_CHOICES, default="clear")
+    route_status = models.CharField(max_length=15, choices=ROUTE_STATUS_CHOICES, default="active")
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
-        return self.title
-
-
-class ReliefDistribution(models.Model):
-    """Matches the ERD's relief_distribution entity — the beneficiary
-    checklist Objective 4 calls for. One row = one relief release event
-    to a specific household, logged by CSWD staff from the Relief
-    Distribution tab. A household can have several rows over time (e.g.
-    relief given for two different disasters), which is why this is its
-    own table rather than a single status flag on Household — that was
-    the previous placeholder behavior (every confirmed household just
-    showed "Registered", see the TODOs this model replaces)."""
-
-    household = models.ForeignKey(
-        Household, on_delete=models.CASCADE, related_name="relief_records"
-    )
-    disaster_type = models.ForeignKey(
-        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="relief_distributions"
-    )
-    goods_type = models.CharField(max_length=100)
-    quantity = models.PositiveIntegerField(default=0)
-    # Free-text name/username of the CSWD staffer who logged this — mirrors
-    # how the rest of the app identifies staff (sessionStorage "geoaid_user"
-    # on the frontend), not a FK to Django's auth User.
-    distributed_by = models.CharField(max_length=150, blank=True)
-    distributed_at = models.DateTimeField(default=timezone.now)
-    remarks = models.CharField(max_length=255, blank=True)
-
-    class Meta:
-        ordering = ["-distributed_at"]
-
-    def __str__(self):
-        return f"{self.household.full_name} — {self.goods_type} x{self.quantity}"
+        return f"{self.start_location} → {self.evacuation_center.name}"
