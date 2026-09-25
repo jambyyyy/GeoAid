@@ -105,7 +105,7 @@ function HomeScreen({ navigation }) {
           <View style={styles.quickActions}>
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: "#e9f7ee" }]}
-              onPress={() => setActiveTab("evacuation")}
+              onPress={() => navigation.navigate("EvacuationMap")}
             >
               <NavIconArrow />
               <Text style={styles.quickActionLabel}>Evacuation Route</Text>
@@ -150,7 +150,14 @@ function HomeScreen({ navigation }) {
                 <View style={[styles.occupancyFill, { width: `${occupancyPct}%` }]} />
               </View>
 
-              <TouchableOpacity style={styles.directionsBtn}>
+              <TouchableOpacity
+                style={styles.directionsBtn}
+                onPress={() =>
+                  navigation.navigate("EvacuationMap", {
+                    focusCenterId: nearest_center.id,
+                  })
+                }
+              >
                 <PinIcon color="#fff" />
                 <Text style={styles.directionsBtnText}>Get Directions</Text>
               </TouchableOpacity>
