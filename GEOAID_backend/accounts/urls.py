@@ -11,6 +11,7 @@ from .views import (
     drrm_delete_disaster_type,
     drrm_update_route,
     drrm_map,
+    drrm_fastest_route,
     drrm_set_risk_area,
     drrm_add_evacuation_center,
     drrm_delete_evacuation_center,
@@ -25,6 +26,7 @@ from .views import (
     register_lookups,
     login_resident,
     resident_dashboard,
+    resident_nearest_route,
 )
 
 urlpatterns = [
@@ -39,6 +41,7 @@ urlpatterns = [
     path("drrm/disaster-types/delete/", drrm_delete_disaster_type),
     path("drrm/routes/update/", drrm_update_route),
     path("drrm/map/", drrm_map),
+    path("drrm/fastest-route/", drrm_fastest_route),
     path("drrm/risk-areas/set/", drrm_set_risk_area),
     path("drrm/evacuation-centers/create/", drrm_add_evacuation_center),
     path("drrm/evacuation-centers/delete/", drrm_delete_evacuation_center),
@@ -55,4 +58,5 @@ urlpatterns = [
     path("resident/register/complete/", register_complete),
     path("resident/login/", login_resident),
     path("resident/dashboard/", resident_dashboard),
+    path("resident/evacuation/nearest-route/", resident_nearest_route),
 ]

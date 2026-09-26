@@ -11,6 +11,8 @@ import json
 import uuid
 
 from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay, EvacuationRoute
+from . import routing
+import re
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -880,6 +882,313 @@ def _highest_risk_by_barangay():
         if RISK_ORDER.get(status, 0) > RISK_ORDER.get(result.get(key, ""), 0):
             result[key] = status
     return result
+
+
+_DISTANCE_RE = re.compile(r"([\d.]+)")
+
+
+def _parse_route_distance_km(text):
+    """route_distance is free text like "2.4 km" (see EvacuationRoute) —
+    pulls the leading number out of it, or None if it can't be parsed."""
+    if not text:
+        return None
+    match = _DISTANCE_RE.search(text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _build_route_graph(avoid_risk=True):
+    """Builds the routing graph from the routes DRRM has pinned
+    (EvacuationRoute), with no separate road table: each pinned route IS an
+    edge from its start_location (matched to a Barangay by name) to its
+    evacuation center.
+
+    Edge weight uses route_distance when it's set; otherwise falls back to
+    the straight-line distance between the barangay and the center's
+    coordinates. road_condition and route_status (used as risk) work the
+    same way as everywhere else in the app: an impassable route is dropped
+    entirely, and avoid_risk penalises medium/high/critical routes.
+
+    Returns (graph, node_info, center_objs) where node_info maps
+    node -> {"name", "lat", "lng", "type"}.
+    """
+    barangays = {b.barangay_name.strip().lower(): b for b in Barangay.objects.all()}
+
+    graph = routing.Graph()
+    node_info = {}
+    center_objs = {}
+
+    for route in EvacuationRoute.objects.select_related("evacuation_center"):
+        center = route.evacuation_center
+        barangay = barangays.get((route.start_location or "").strip().lower())
+        if barangay is None:
+            continue  # start_location doesn't match a known barangay -- can't place it on the graph
+
+        b_node, c_node = f"b{barangay.id}", f"c{center.id}"
+        if b_node not in node_info:
+            node_info[b_node] = {"name": barangay.barangay_name, "lat": barangay.latitude, "lng": barangay.longitude, "type": "barangay"}
+        if c_node not in node_info:
+            lat = center.latitude if center.latitude is not None else barangay.latitude
+            lng = center.longitude if center.longitude is not None else barangay.longitude
+            node_info[c_node] = {"name": center.name, "lat": lat, "lng": lng, "type": "center"}
+            center_objs[c_node] = center
+
+        km = _parse_route_distance_km(route.route_distance)
+        if km is None:
+            a, b = node_info[b_node], node_info[c_node]
+            if None in (a["lat"], a["lng"], b["lat"], b["lng"]):
+                continue  # no distance on the route and no coordinates to estimate one
+            km = routing.haversine_km(a["lat"], a["lng"], b["lat"], b["lng"])
+
+        risk = {c_node: routing.RISK_MULTIPLIER[route.route_status]} if avoid_risk and route.route_status in routing.RISK_MULTIPLIER else None
+        graph.add_edge(b_node, c_node, km, route.road_condition, segment_id=route.id, risk=risk)
+
+    return graph, node_info, center_objs
+
+
+def _route_result_json(result, node_info, center_objs):
+    """Turns a routing.find_evacuation_routes() entry into API JSON."""
+    center = center_objs[result["center"]]
+    usable, reason = _center_eligibility(center)
+    nodes, edges = result["nodes"], result["edges"]
+    return {
+        "center": {
+            "id": center.id,
+            "name": center.name,
+            "barangay": center.barangay,
+            "latitude": node_info[result["center"]]["lat"],
+            "longitude": node_info[result["center"]]["lng"],
+            "occupancy": center.current_occupancy,
+            "capacity": center.capacity,
+            "status": center.status,
+        },
+        "eligible": usable,
+        "ineligible_reason": reason,
+        "distance_km": result["distance_km"],
+        "est_minutes": result["minutes"],
+        "cost": result["cost"],
+        "geometry": [
+            [node_info[n]["lat"], node_info[n]["lng"]] for n in nodes
+            if node_info[n]["lat"] is not None and node_info[n]["lng"] is not None
+        ],
+        "legs": [
+            {
+                "from": node_info[nodes[i]]["name"],
+                "to": node_info[nodes[i + 1]]["name"],
+                "distance_km": round(e["distance_km"], 2),
+                "road_condition": e["condition"],
+                "route_id": e["segment_id"],
+            }
+            for i, e in enumerate(edges)
+        ],
+    }
+
+
+def _nearest_route_from_point(lat, lng, avoid_risk=True, center_id=None):
+    """Shortest path (Dijkstra) from an arbitrary lat/lng — a resident's GPS
+    fix, or their household's saved location — to the nearest evacuation
+    center. Reuses the exact same graph DRRM's drrm_fastest_route builds
+    from pinned routes (_build_route_graph) — no separate road/segment
+    table, same as everywhere else in this app.
+
+    The point is attached to the graph with a temporary "virtual start"
+    node connected by straight-line connectors to its nearest barangay
+    nodes (routing.attach_virtual_start), then Dijkstra runs once from
+    there over the real (weighted-by-condition/risk) pinned routes.
+
+    Returns (recommended, alternatives, message) — recommended/alternatives
+    are _route_result_json() dicts (or None/[] if nothing is reachable).
+    """
+    graph, node_info, center_objs = _build_route_graph(avoid_risk=avoid_risk)
+    if not center_objs:
+        return None, [], (
+            "No routes have been pinned yet. Pin a route from a barangay to an "
+            "evacuation center first (Disaster Location Info > Evacuation Routes)."
+        )
+
+    barangay_nodes = [
+        n for n, info in node_info.items()
+        if info["type"] == "barangay" and info["lat"] is not None and info["lng"] is not None
+    ]
+    if not barangay_nodes:
+        return None, [], "No barangays have coordinates set yet, so a route can't be drawn."
+
+    node_coords = {n: (node_info[n]["lat"], node_info[n]["lng"]) for n in barangay_nodes}
+    source = "resident_start"
+    routing.attach_virtual_start(graph, source, lat, lng, node_coords, barangay_nodes, k=2)
+    node_info[source] = {"name": "Your location", "lat": lat, "lng": lng, "type": "start"}
+
+    targets = list(center_objs.keys())
+    if center_id:
+        targets = [n for n in targets if str(center_objs[n].id) == str(center_id)]
+        if not targets:
+            return None, [], "That evacuation center can't be routed to."
+
+    results = routing.find_evacuation_routes(graph, source, targets)
+    if not results:
+        return None, [], "No evacuation center is reachable from your location yet — it may be marked impassable."
+
+    routes = [_route_result_json(r, node_info, center_objs) for r in results]
+    recommended = next((r for r in routes if r["eligible"]), None)
+    alternatives = [r for r in routes if r is not recommended][:4]
+    message = "" if recommended else "Centers are reachable, but none are currently open with space available."
+    return recommended, alternatives, message
+
+
+def _household_location(household):
+    """Best known point for a household: their saved GPS fix if they gave
+    one at registration, else their barangay's centroid. Returns
+    (lat, lng, source) or (None, None, None) if neither is available."""
+    if household.gps_lat is not None and household.gps_lng is not None:
+        return household.gps_lat, household.gps_lng, "household_gps"
+
+    name = (household.barangay or "").strip().lower()
+    if name:
+        barangay = Barangay.objects.filter(barangay_name__iexact=name).first()
+        if barangay and barangay.latitude is not None and barangay.longitude is not None:
+            return barangay.latitude, barangay.longitude, "barangay_centroid"
+
+    return None, None, None
+
+
+@csrf_exempt
+def resident_nearest_route(request):
+    """GET: for the resident app's evacuation map — the shortest (Dijkstra)
+    route from the resident's current position to the nearest open
+    evacuation center with space, reusing the same pinned-route graph as
+    the DRRM dashboard's drrm_fastest_route. No separate road table.
+
+    Query params:
+      mobile_number  required -- identifies the resident (used to fall
+                     back to their saved household location, and so a
+                     future version can log/personalize this per-account)
+      lat, lng       optional -- resident's live GPS fix (e.g. from the
+                     map screen's "show my location"). When omitted, falls
+                     back to the household's saved gps_lat/gps_lng, then
+                     to their barangay's centroid.
+      center_id      optional -- force this evacuation center instead of
+                     automatically picking the nearest eligible one
+      avoid_risk     "1" (default) penalises routes flagged medium/high/
+                     critical risk; "0" ignores it
+    """
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "GET":
+        return JsonResponse({"message": "GET required."}, status=405)
+
+    mobile_number = (request.GET.get("mobile_number") or "").strip()
+    if not mobile_number:
+        return JsonResponse({"message": "Provide mobile_number."}, status=400)
+
+    try:
+        household = Household.objects.get(mobile_number=mobile_number)
+    except Household.DoesNotExist:
+        return JsonResponse({"message": "Household not found."}, status=404)
+
+    lat_param, lng_param = request.GET.get("lat"), request.GET.get("lng")
+    location_source = "live_gps"
+    if lat_param is not None and lng_param is not None:
+        try:
+            lat, lng = float(lat_param), float(lng_param)
+        except ValueError:
+            return JsonResponse({"message": "lat/lng must be numbers."}, status=400)
+    else:
+        lat, lng, location_source = _household_location(household)
+        if lat is None:
+            return JsonResponse({
+                "message": "We don't know your location yet. Enable location on the map, "
+                           "or add your address during registration.",
+            }, status=404)
+
+    avoid_risk = (request.GET.get("avoid_risk", "1") or "1").strip() not in ("0", "false", "no")
+    center_id = request.GET.get("center_id")
+
+    recommended, alternatives, message = _nearest_route_from_point(
+        lat, lng, avoid_risk=avoid_risk, center_id=center_id
+    )
+
+    return JsonResponse({
+        "algorithm": "dijkstra",
+        "avoid_risk": avoid_risk,
+        "start": {"latitude": lat, "longitude": lng, "source": location_source},
+        "recommended": recommended,
+        "alternatives": alternatives,
+        "message": message,
+    }, status=200 if recommended else 404)
+
+
+@csrf_exempt
+def drrm_fastest_route(request):
+    """GET: fastest evacuation route from a barangay, computed with
+    Dijkstra's algorithm (see routing.py) over the routes DRRM has already
+    pinned (EvacuationRoute) -- no separate road table, so a route can only
+    be found where DRRM has pinned one from that barangay.
+
+    Query params:
+      from_barangay   required -- name of the starting barangay
+      avoid_risk      "1" (default) penalises routes flagged medium/high/
+                       critical (EvacuationRoute.route_status); "0" ignores it
+      center_id       optional -- force this evacuation center instead of
+                       automatically picking the fastest open one
+    """
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "GET":
+        return JsonResponse({"message": "GET required."}, status=405)
+
+    from_name = (request.GET.get("from_barangay") or "").strip()
+    if not from_name:
+        return JsonResponse({"message": "Provide from_barangay."}, status=400)
+
+    avoid_risk = (request.GET.get("avoid_risk", "1") or "1").strip() not in ("0", "false", "no")
+    graph, node_info, center_objs = _build_route_graph(avoid_risk=avoid_risk)
+
+    if not center_objs:
+        return JsonResponse({
+            "message": "No routes have been pinned yet. Pin a route from a barangay to an evacuation "
+                       "center first (Disaster Location Info > Evacuation Routes).",
+        }, status=404)
+
+    source = next(
+        (n for n, i in node_info.items() if i["type"] == "barangay" and i["name"].lower() == from_name.lower()),
+        None,
+    )
+    if source is None:
+        return JsonResponse({
+            "message": f"No pinned route starts from '{from_name}' yet.",
+        }, status=404)
+    start = {"name": node_info[source]["name"], "latitude": node_info[source]["lat"], "longitude": node_info[source]["lng"]}
+
+    targets = list(center_objs.keys())
+    forced = request.GET.get("center_id")
+    if forced:
+        targets = [n for n in targets if str(center_objs[n].id) == str(forced)]
+        if not targets:
+            return JsonResponse({"message": "That evacuation center can't be routed to."}, status=404)
+
+    results = routing.find_evacuation_routes(graph, source, targets)
+    if not results:
+        return JsonResponse({
+            "message": f"No route from '{from_name}' reaches an evacuation center -- it may be marked impassable.",
+        }, status=404)
+
+    routes = [_route_result_json(r, node_info, center_objs) for r in results]
+    recommended = next((r for r in routes if r["eligible"]), None)
+    alternatives = [r for r in routes if r is not recommended][:4]
+
+    return JsonResponse({
+        "algorithm": "dijkstra",
+        "avoid_risk": avoid_risk,
+        "start": start,
+        "recommended": recommended,
+        "alternatives": alternatives,
+        "message": "" if recommended else "Centers are reachable, but none are currently open with space available.",
+    })
 
 
 @csrf_exempt
@@ -2059,6 +2368,40 @@ def resident_dashboard(request):
 
     household_name = f"{household.full_name.split(' ')[-1]} Household" if household.full_name else "Household"
 
+    # Nearest evacuation center via the same Dijkstra routing DRRM uses
+    # (_nearest_route_from_point / routing.py) starting from the
+    # household's saved location — no live GPS fix available on this
+    # endpoint, so the map screen (which does have GPS) is what refines
+    # this further and draws the actual path.
+    nearest_center = None
+    lat, lng, _source = _household_location(household)
+    if lat is not None:
+        recommended, _alternatives, _message = _nearest_route_from_point(lat, lng)
+        if recommended:
+            c = recommended["center"]
+            nearest_center = {
+                "id": c["id"],
+                "name": c["name"],
+                "distance_km": recommended["distance_km"],
+                "walk_minutes": recommended["est_minutes"],
+                "status": c["status"],
+                "occupancy": c["occupancy"],
+                "capacity": c["capacity"],
+            }
+
+    if nearest_center is None:
+        # Fall back to a placeholder only when no route/coordinates exist
+        # yet (e.g. DRRM hasn't pinned any evacuation routes), so the Home
+        # screen still has something sensible to show.
+        nearest_center = {
+            "name": "Tibanga Gymnasium",
+            "distance_km": 0.8,
+            "walk_minutes": 10,
+            "status": "open",
+            "occupancy": 87,
+            "capacity": 300,
+        }
+
     data = {
         "household_id": household.id,
         "household_name": household_name,
@@ -2068,15 +2411,7 @@ def resident_dashboard(request):
             "title": "Flood Advisory — Tibanga",
             "body": "PAGASA: Heavy rainfall expected. Prepare go-bag. Issued 7:45 AM",
         },
-        # TODO: replace with a real EvacuationCenter model + geo lookup.
-        "nearest_center": {
-            "name": "Tibanga Gymnasium",
-            "distance_km": 0.8,
-            "walk_minutes": 10,
-            "status": "open",
-            "occupancy": 87,
-            "capacity": 300,
-        },
+        "nearest_center": nearest_center,
         "members": members,
     }
 
