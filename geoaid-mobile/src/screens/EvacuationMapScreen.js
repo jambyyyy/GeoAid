@@ -161,14 +161,23 @@ function buildMapHtml() {
     // Draws the Dijkstra route returned by /api/resident/evacuation/
     // nearest-route/ entirely inside this map — this is what replaces
     // handing the resident off to the Google Maps app. coords is
-    // [[lat, lng], ...], the barangay-by-barangay waypoints Dijkstra
-    // chose (routing.py's rebuilt path geometry); this function snaps
-    // that to the actual road/path network before drawing it.
+    // [[lat, lng], ...], the barangay-by-barangay waypoints Dijkstra chose
+    // (routing.py's rebuilt path geometry). Dijkstra needs those in-between
+    // barangay nodes to pick which route/road-condition applies, but they
+    // are administrative centroids, not real waypoints on the road network
+    // -- forcing OSRM to physically detour through one produces the
+    // zigzag/backtrack you'd see if a barangay centroid isn't actually
+    // between the two endpoints. So for the drawn road path we only send
+    // OSRM the real endpoints (where the resident actually is, and the
+    // evacuation center) and let it find the genuine direct road route
+    // between those two; Dijkstra's in-between hops still decide the
+    // eligibility/cost ranking, just not the line that gets drawn.
     async function setRoute(coords) {
       clearRoute();
       if (!coords || coords.length < 2) return;
+      const endpoints = [coords[0], coords[coords.length - 1]];
 
-      const startPt = coords[0];
+      const startPt = endpoints[0];
       routeStartMarker = L.circleMarker(startPt, {
         radius: 7, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 1,
       }).addTo(map);
@@ -176,11 +185,11 @@ function buildMapHtml() {
       // Bright dashed placeholder so it's obviously "not a real road yet"
       // rather than looking like a finished route — replaced below once
       // the road-snapped geometry comes back.
-      routeLine = L.polyline(coords, { color: "#f97316", weight: 3, opacity: 0.8, dashArray: "2 10" }).addTo(map);
+      routeLine = L.polyline(endpoints, { color: "#f97316", weight: 3, opacity: 0.8, dashArray: "2 10" }).addTo(map);
       map.fitBounds(routeLine.getBounds(), { padding: [60, 60], maxZoom: 16 });
 
       try {
-        const roadCoords = await fetchRoadRoute(coords);
+        const roadCoords = await fetchRoadRoute(endpoints);
         if (roadCoords.length > 1) {
           map.removeLayer(routeLine);
           routeLine = L.polyline(roadCoords, { color: "#2563eb", weight: 5, opacity: 0.85 }).addTo(map);

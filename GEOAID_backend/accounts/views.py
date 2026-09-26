@@ -907,6 +907,16 @@ def _build_route_graph(avoid_risk=True):
     edge from its start_location (matched to a Barangay by name) to its
     evacuation center.
 
+    Barangays DRRM hasn't pinned a route for yet (and hasn't flagged a risk
+    for either, since RiskAreasPanel creates a route the same way) are NOT
+    left unroutable: below, any barangay that still has zero edges after
+    DRRM's real pinned routes are all added gets a straight-line "passable"
+    fallback edge to its nearest evacuation center -- that's the ordinary,
+    no-known-problems condition, with no risk penalty, since DRRM hasn't
+    flagged anything there. The moment DRRM pins a real route or sets a
+    risk level for that barangay, that real edge takes over and this
+    fallback is skipped for it.
+
     Edge weight uses route_distance when it's set; otherwise falls back to
     the straight-line distance between the barangay and the center's
     coordinates. road_condition and route_status (used as risk) work the
@@ -922,6 +932,18 @@ def _build_route_graph(avoid_risk=True):
     node_info = {}
     center_objs = {}
 
+    # Every evacuation center is a graph node from the start (not just ones
+    # DRRM has already pinned a route to), so the fallback pass below always
+    # has somewhere to connect an unrouted barangay to.
+    for center in EvacuationCenter.objects.all():
+        c_node = f"c{center.id}"
+        home = barangays.get((center.barangay or "").strip().lower())
+        lat = center.latitude if center.latitude is not None else (home.latitude if home else None)
+        lng = center.longitude if center.longitude is not None else (home.longitude if home else None)
+        node_info[c_node] = {"name": center.name, "lat": lat, "lng": lng, "type": "center"}
+        center_objs[c_node] = center
+        graph.add_node(c_node)
+
     for route in EvacuationRoute.objects.select_related("evacuation_center"):
         center = route.evacuation_center
         barangay = barangays.get((route.start_location or "").strip().lower())
@@ -931,11 +953,6 @@ def _build_route_graph(avoid_risk=True):
         b_node, c_node = f"b{barangay.id}", f"c{center.id}"
         if b_node not in node_info:
             node_info[b_node] = {"name": barangay.barangay_name, "lat": barangay.latitude, "lng": barangay.longitude, "type": "barangay"}
-        if c_node not in node_info:
-            lat = center.latitude if center.latitude is not None else barangay.latitude
-            lng = center.longitude if center.longitude is not None else barangay.longitude
-            node_info[c_node] = {"name": center.name, "lat": lat, "lng": lng, "type": "center"}
-            center_objs[c_node] = center
 
         km = _parse_route_distance_km(route.route_distance)
         if km is None:
@@ -947,7 +964,36 @@ def _build_route_graph(avoid_risk=True):
         risk = {c_node: routing.RISK_MULTIPLIER[route.route_status]} if avoid_risk and route.route_status in routing.RISK_MULTIPLIER else None
         graph.add_edge(b_node, c_node, km, route.road_condition, segment_id=route.id, risk=risk)
 
+    # Fallback connectivity for barangays DRRM hasn't touched at all: a
+    # straight-line "passable" edge (no risk penalty) to the nearest
+    # evacuation center, so the resident app doesn't dead-end on "no route
+    # pinned yet" just because DRRM hasn't gotten to that barangay.
+    centers_with_coords = [
+        (c_node, node_info[c_node]["lat"], node_info[c_node]["lng"])
+        for c_node in center_objs
+        if node_info[c_node]["lat"] is not None and node_info[c_node]["lng"] is not None
+    ]
+    if centers_with_coords:
+        for barangay in barangays.values():
+            if barangay.latitude is None or barangay.longitude is None:
+                continue
+            b_node = f"b{barangay.id}"
+            if graph.adj.get(b_node):
+                continue  # already has at least one real pinned route -- DRRM's data wins
+
+            node_info.setdefault(
+                b_node,
+                {"name": barangay.barangay_name, "lat": barangay.latitude, "lng": barangay.longitude, "type": "barangay"},
+            )
+            nearest_c_node, c_lat, c_lng = min(
+                centers_with_coords,
+                key=lambda c: routing.haversine_km(barangay.latitude, barangay.longitude, c[1], c[2]),
+            )
+            km = routing.road_length_km(barangay.latitude, barangay.longitude, c_lat, c_lng)
+            graph.add_edge(b_node, nearest_c_node, km, "passable", segment_id=None)
+
     return graph, node_info, center_objs
+
 
 
 def _route_result_json(result, node_info, center_objs):
@@ -996,19 +1042,21 @@ def _nearest_route_from_point(lat, lng, avoid_risk=True, center_id=None):
     table, same as everywhere else in this app.
 
     The point is attached to the graph with a temporary "virtual start"
-    node connected by straight-line connectors to its nearest barangay
-    nodes (routing.attach_virtual_start), then Dijkstra runs once from
-    there over the real (weighted-by-condition/risk) pinned routes.
+    node connected by straight-line connectors to EVERY barangay that has
+    a route (routing.attach_virtual_start with k = all of them, not just
+    the 2 geographically nearest) -- the graph only has barangay-to-center
+    edges, not barangay-to-barangay ones, so connecting to just the
+    nearest couple of barangays could miss the barangay that actually
+    leads to the cheapest overall path and silently return a "shortest"
+    route that wasn't. Connecting to all of them costs nothing on a
+    graph this size and guarantees Dijkstra sees the true minimum.
 
     Returns (recommended, alternatives, message) — recommended/alternatives
     are _route_result_json() dicts (or None/[] if nothing is reachable).
     """
     graph, node_info, center_objs = _build_route_graph(avoid_risk=avoid_risk)
     if not center_objs:
-        return None, [], (
-            "No routes have been pinned yet. Pin a route from a barangay to an "
-            "evacuation center first (Disaster Location Info > Evacuation Routes)."
-        )
+        return None, [], "No evacuation centers have been registered yet."
 
     barangay_nodes = [
         n for n, info in node_info.items()
@@ -1019,7 +1067,7 @@ def _nearest_route_from_point(lat, lng, avoid_risk=True, center_id=None):
 
     node_coords = {n: (node_info[n]["lat"], node_info[n]["lng"]) for n in barangay_nodes}
     source = "resident_start"
-    routing.attach_virtual_start(graph, source, lat, lng, node_coords, barangay_nodes, k=2)
+    routing.attach_virtual_start(graph, source, lat, lng, node_coords, barangay_nodes, k=len(barangay_nodes))
     node_info[source] = {"name": "Your location", "lat": lat, "lng": lng, "type": "start"}
 
     targets = list(center_objs.keys())
@@ -1150,8 +1198,7 @@ def drrm_fastest_route(request):
 
     if not center_objs:
         return JsonResponse({
-            "message": "No routes have been pinned yet. Pin a route from a barangay to an evacuation "
-                       "center first (Disaster Location Info > Evacuation Routes).",
+            "message": "No evacuation centers have been registered yet.",
         }, status=404)
 
     source = next(
