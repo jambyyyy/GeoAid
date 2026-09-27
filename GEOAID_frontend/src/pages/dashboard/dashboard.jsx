@@ -587,8 +587,6 @@ function Dashboard() {
                 <h2>Quick Actions</h2>
                 <div className="action-grid">
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Household Registration")}>Confirm Registration</button>
-                  <button type="button" className="action-btn" onClick={() => setActiveItem("Attendance")}>Scan QR Code</button>
-                  <button type="button" className="action-btn" onClick={() => setActiveItem("Evacuation Centers")}>Update Occupancy</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Relief Distribution")}>Record Relief Distribution</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Attendance")}>View Checked-In Households</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Reports")}>Generate Report</button>

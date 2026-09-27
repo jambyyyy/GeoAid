@@ -90,6 +90,11 @@ function CSWDDashboard() {
   const [reliefFormError, setReliefFormError] = useState("");
   const [reliefFormSuccess, setReliefFormSuccess] = useState("");
 
+  const [stockForm, setStockForm] = useState({ goods_type: "", quantity: "" });
+  const [isSubmittingStock, setIsSubmittingStock] = useState(false);
+  const [stockFormError, setStockFormError] = useState("");
+  const [stockFormSuccess, setStockFormSuccess] = useState("");
+
   const [reportForm, setReportForm] = useState({
     report_type: "",
     title: "",
@@ -223,6 +228,11 @@ function CSWDDashboard() {
                 }
               : h
           ),
+          // Reflect the stock deduction immediately without a full refetch.
+          relief_stock: (prev.relief_stock || []).map((s) =>
+            s.goods_type === data.stock.goods_type ? { ...s, quantity: data.stock.quantity } : s
+          ),
+          relief_released: (prev.relief_released || 0) + data.relief.quantity,
         };
       });
 
@@ -239,6 +249,55 @@ function CSWDDashboard() {
       setReliefFormError("Unable to connect to the server.");
     } finally {
       setIsSubmittingRelief(false);
+    }
+  };
+
+  const handleStockFieldChange = (field, value) => {
+    setStockForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddStock = async (e) => {
+    e.preventDefault();
+    setStockFormError("");
+    setStockFormSuccess("");
+
+    if (!stockForm.goods_type || !stockForm.quantity) {
+      setStockFormError("Goods type and quantity are required.");
+      return;
+    }
+
+    setIsSubmittingStock(true);
+    try {
+      const response = await fetch(`${API_URL}/api/cswd/relief/stock/add/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stockForm),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setStockFormError(data.message || "Could not update stock. Please try again.");
+        return;
+      }
+
+      setDashboardData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          relief_stock: (prev.relief_stock || []).map((s) =>
+            s.goods_type === data.stock.goods_type ? { ...s, quantity: data.stock.quantity } : s
+          ),
+        };
+      });
+
+      setStockFormSuccess(`${data.stock.label} in storage is now ${data.stock.quantity}.`);
+      setStockForm({ goods_type: "", quantity: "" });
+    } catch (err) {
+      console.error(err);
+      setStockFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingStock(false);
     }
   };
 
@@ -307,6 +366,7 @@ function CSWDDashboard() {
   }
 
   const reliefDistribution = dashboardData?.relief_distribution || [];
+  const reliefStock = dashboardData?.relief_stock || [];
   const evacuationCenters = dashboardData?.evacuation_centers || [];
   const allHouseholds = dashboardData?.households || [];
 
@@ -379,26 +439,37 @@ function CSWDDashboard() {
                 <span className="stat-value">{dashboardData?.donations ?? 0}</span>
                 <span className="stat-label">Donations Logged</span>
               </article>
+
+              {reliefStock.map((s) => (
+                <article key={s.goods_type} className="stat-card stat-info">
+                  <span className="stat-value">{s.quantity}</span>
+                  <span className="stat-label">{s.label} Left in Storage</span>
+                </article>
+              ))}
             </section>
 
             <section className="content-grid">
               <article className="panel">
-                <h2>Relief Distribution Overview</h2>
+                <h2>Recent Relief Releases</h2>
                 <div className="table-scroll">
                   <table className="data-table">
                     <thead>
                       <tr>
+                        <th>Household</th>
                         <th>Barangay</th>
-                        <th>Families</th>
+                        <th>Goods</th>
+                        <th>Qty</th>
                         <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {reliefDistribution.length > 0 ? (
-                        reliefDistribution.map((item, index) => (
-                          <tr key={index}>
+                        reliefDistribution.map((item) => (
+                          <tr key={item.id}>
+                            <td>{item.household}</td>
                             <td>{item.barangay}</td>
-                            <td>{item.families}</td>
+                            <td>{item.goods_type}</td>
+                            <td>{item.quantity}</td>
                             <td>
                               <span className={`status-badge status-${String(item.status).toLowerCase().replace(/\s+/g, "-")}`}>
                                 {item.status}
@@ -408,7 +479,7 @@ function CSWDDashboard() {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="3">No relief distribution records yet.</td>
+                          <td colSpan="5">No relief releases recorded yet.</td>
                         </tr>
                       )}
                     </tbody>
@@ -456,17 +527,22 @@ function CSWDDashboard() {
 
                 <div className="donation-form-field">
                   <label htmlFor="relief_goods_type">Goods Type</label>
-                  <input
-                    id="relief_goods_type"
-                    type="text"
-                    value={reliefForm.goods_type}
-                    onChange={(e) => handleReliefFieldChange("goods_type", e.target.value)}
-                    placeholder="e.g. Rice, canned goods, hygiene kit"
-                  />
+                  <div className="goods-selection-scroll">
+                    {reliefStock.map((s) => (
+                      <div
+                        key={s.goods_type}
+                        className={`goods-option ${reliefForm.goods_type === s.goods_type ? 'selected' : ''}`}
+                        onClick={() => handleReliefFieldChange("goods_type", s.goods_type)}
+                      >
+                        <span className="goods-name">{s.label}</span>
+                        <span className="goods-quantity">{s.quantity} left</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_quantity">Quantity</label>
+                  <label htmlFor="relief_quantity">Quantity (packs)</label>
                   <input
                     id="relief_quantity"
                     type="number"
@@ -509,6 +585,28 @@ function CSWDDashboard() {
                   </button>
                 </div>
               </form>
+            </article>
+
+            <article className="panel">
+              <h2>Relief Goods Storage</h2>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Goods Type</th>
+                      <th>Left in Storage</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reliefStock.map((s) => (
+                      <tr key={s.goods_type}>
+                        <td>{s.label}</td>
+                        <td>{s.quantity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </article>
 
             <article className="panel">
@@ -955,6 +1053,47 @@ function CSWDDashboard() {
                 <div className="donation-form-actions">
                   <button type="submit" className="action-btn" disabled={isSubmittingDonation}>
                     {isSubmittingDonation ? "Saving…" : "Add Donation"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel">
+              <h2>Add to Storage</h2>
+              <form className="donation-form" onSubmit={handleAddStock}>
+                {stockFormError && <p className="donation-form-error">{stockFormError}</p>}
+                {stockFormSuccess && <p className="panel-note">{stockFormSuccess}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="stock_goods_type">Goods Type</label>
+                  <select
+                    id="stock_goods_type"
+                    value={stockForm.goods_type}
+                    onChange={(e) => handleStockFieldChange("goods_type", e.target.value)}
+                  >
+                    <option value="">Select goods type</option>
+                    {reliefStock.map((s) => (
+                      <option key={s.goods_type} value={s.goods_type}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="stock_quantity">Quantity to Add</label>
+                  <input
+                    id="stock_quantity"
+                    type="number"
+                    min="1"
+                    value={stockForm.quantity}
+                    onChange={(e) => handleStockFieldChange("quantity", e.target.value)}
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingStock}>
+                    {isSubmittingStock ? "Saving…" : "Add to Storage"}
                   </button>
                 </div>
               </form>

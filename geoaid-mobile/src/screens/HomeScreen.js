@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import BottomNav from "../components/BottomNav";
-import { BellIcon, WarnIcon, NavIconArrow, QRIcon, ClockIcon, PinIcon } from "../components/icons";
+import { BellIcon, WarnIcon, NavIconArrow, QRIcon, ClockIcon, PinIcon, CheckIcon, PhoneIcon } from "../components/icons";
 import { API_BASE } from "../api";
 
 const FLAG_STYLE = {
@@ -39,6 +39,8 @@ const FALLBACK_DATA = {
 function HomeScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
+  const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const [checkInTime, setCheckInTime] = useState(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -72,6 +74,32 @@ function HomeScreen({ navigation }) {
 
   const { household_name, unread_alerts, advisory, nearest_center, members = [] } = data;
   const occupancyPct = Math.round((nearest_center.occupancy / nearest_center.capacity) * 100);
+
+  const handleSafetyCheckIn = async () => {
+    const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/resident/safety-checkin/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mobile_number: mobileNumber }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        Alert.alert("Check-In Failed", result.message || "Unable to submit safety check-in.");
+        return;
+      }
+
+      setIsCheckedIn(true);
+      setCheckInTime(new Date().toLocaleTimeString());
+      Alert.alert("Safety Confirmed", "Your safety status has been updated. Your household is marked as safe.");
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Unable to connect to the server.");
+    }
+  };
 
   return (
     <MobileShell>
@@ -117,11 +145,60 @@ function HomeScreen({ navigation }) {
               <QRIcon />
               <Text style={styles.quickActionLabel}>My QR Code</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickAction, { backgroundColor: "#fdf1e3" }]}>
+            <TouchableOpacity 
+              style={[styles.quickAction, { backgroundColor: "#fdf1e3" }]}
+              onPress={() => navigation.navigate("RegistrationStatus")}
+            >
               <ClockIcon />
               <Text style={styles.quickActionLabel}>Reg. Status</Text>
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity 
+            style={styles.emergencyContactsBtn}
+            onPress={() => navigation.navigate("EmergencyContacts")}
+          >
+            <PhoneIcon color="#dc2626" />
+            <View style={styles.emergencyContactsText}>
+              <Text style={styles.emergencyContactsTitle}>Emergency Contacts</Text>
+              <Text style={styles.emergencyContactsSubtitle}>Quick access to important numbers</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.reliefAction}
+            onPress={() => navigation.navigate("ReliefDistribution")}
+          >
+            <Text style={styles.reliefActionTitle}>Relief Distribution</Text>
+            <Text style={styles.reliefActionSubtitle}>Check your relief status and history</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[
+              styles.safetyCheckIn,
+              isCheckedIn && styles.safetyCheckInConfirmed
+            ]}
+            onPress={handleSafetyCheckIn}
+            disabled={isCheckedIn}
+          >
+            <View style={styles.safetyCheckInContent}>
+              <CheckIcon color={isCheckedIn ? "#15803d" : "#fff"} />
+              <View style={styles.safetyCheckInText}>
+                <Text style={[
+                  styles.safetyCheckInTitle,
+                  isCheckedIn && styles.safetyCheckInTitleConfirmed
+                ]}>
+                  {isCheckedIn ? "Safety Confirmed" : "I'm Safe"}
+                </Text>
+                <Text style={[
+                  styles.safetyCheckInSubtitle,
+                  isCheckedIn && styles.safetyCheckInSubtitleConfirmed
+                ]}>
+                  {isCheckedIn ? `Checked in at ${checkInTime}` : "One-tap safety status update"}
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
 
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Nearest Evacuation Center</Text>
@@ -207,9 +284,7 @@ function HomeScreen({ navigation }) {
           onSelect={async (tab) => {
             setActiveTab(tab);
             if (tab === "profile") {
-              // Placeholder sign-out path until a real profile screen exists.
-              await AsyncStorage.removeItem("geoaid_resident_mobile");
-              navigation.replace("Login");
+              navigation.navigate("Profile");
             }
           }}
         />
@@ -260,6 +335,77 @@ const styles = StyleSheet.create({
   quickActions: { flexDirection: "row", gap: 10 },
   quickAction: { flex: 1, borderRadius: 12, padding: 12, alignItems: "center", gap: 6 },
   quickActionLabel: { fontSize: 12, fontWeight: "600", color: "#374151", textAlign: "center" },
+  safetyCheckIn: {
+    backgroundColor: "#dc2626",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#b91c1c",
+  },
+  safetyCheckInConfirmed: {
+    backgroundColor: "#dcfce7",
+    borderColor: "#bbf7d0",
+  },
+  safetyCheckInContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  safetyCheckInText: { flex: 1 },
+  safetyCheckInTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  safetyCheckInTitleConfirmed: {
+    color: "#166534",
+  },
+  safetyCheckInSubtitle: {
+    fontSize: 12,
+    color: "#fee2e2",
+    marginTop: 2,
+  },
+  safetyCheckInSubtitleConfirmed: {
+    color: "#15803d",
+  },
+  reliefAction: {
+    backgroundColor: "#dbeafe",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+  },
+  reliefActionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1d4ed8",
+  },
+  reliefActionSubtitle: {
+    fontSize: 12,
+    color: "#3b82f6",
+    marginTop: 2,
+  },
+  emergencyContactsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#fee2e2",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
+  emergencyContactsText: { flex: 1 },
+  emergencyContactsTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#b91c1c",
+  },
+  emergencyContactsSubtitle: {
+    fontSize: 12,
+    color: "#dc2626",
+    marginTop: 2,
+  },
   section: {},
   sectionLabel: { fontSize: 13, fontWeight: "700", color: "#374151", marginBottom: 8 },
   centerPanel: { backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#eef0f3" },

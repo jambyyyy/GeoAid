@@ -30,6 +30,31 @@ class Barangay(models.Model):
         return self.barangay_name
 
 
+class Purok(models.Model):
+    """New table to store purok information and resident routes.
+    This allows tracking of purok-specific data and evacuation routes
+    from purok to barangay/evacuation centers."""
+
+    barangay = models.ForeignKey(
+        Barangay, on_delete=models.CASCADE, related_name="puroks"
+    )
+    purok_name = models.CharField(max_length=100)
+    # Route information from purok to barangay/evacuation center
+    route_description = models.TextField(blank=True)
+    route_distance = models.CharField(max_length=50, blank=True)
+    estimated_time = models.CharField(max_length=50, blank=True)
+    # Coordinates for the purok (optional, for mapping)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        verbose_name_plural = "Puroks"
+        unique_together = ('barangay', 'purok_name')
+
+    def __str__(self):
+        return f"{self.purok_name} - {self.barangay.barangay_name}"
+
+
 class DisasterType(models.Model):
     """New table matching the thesis ERD's disaster_type entity —
     ties an Attendance record (and eventually donation/relief_distribution/
@@ -78,6 +103,19 @@ class Household(models.Model):
         "Tipanoy": ["Purok 1-A (Bernales)", "Purok 4 (Upper Pindugangan)", "Purok 5"],
     }
 
+    @staticmethod
+    def purok_choices(barangay_name):
+        """(value, label) pairs built live from the Purok table for a specific barangay.
+        Returns empty list if barangay not found or has no puroks."""
+        try:
+            barangay = Barangay.objects.get(barangay_name=barangay_name)
+            return [
+                (purok.purok_name, purok.purok_name)
+                for purok in Purok.objects.filter(barangay=barangay).order_by('purok_name')
+            ]
+        except Barangay.DoesNotExist:
+            return []
+
     DWELLING_TYPE_CHOICES = [
         ("concrete", "Concrete"),
         ("semi_concrete", "Semi-concrete"),
@@ -118,6 +156,10 @@ class Household(models.Model):
         Barangay, on_delete=models.SET_NULL, null=True, blank=True, related_name="households"
     )
     purok = models.CharField(max_length=100, blank=True)
+    # Foreign key to Purok for route information
+    purok_fk = models.ForeignKey(
+        Purok, on_delete=models.SET_NULL, null=True, blank=True, related_name="households"
+    )
     address_line = models.CharField(max_length=255, blank=True)
     landmark = models.CharField(max_length=255, blank=True)
     dwelling_type = models.CharField(max_length=20, choices=DWELLING_TYPE_CHOICES, blank=True)
@@ -300,6 +342,76 @@ class Donation(models.Model):
 
     def __str__(self):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
+
+
+# Shared by ReliefStock and ReliefDistribution below. Per Dashhh's call,
+# relief goods aren't tracked by free-text goods_type like Donation is —
+# they're bucketed into just two kinds: "rice" (tracked on its own) and
+# "pack" (every other kind of relief good, counted as one generic pack).
+RELIEF_GOODS_TYPE_CHOICES = [
+    ("rice", "Rice"),
+    ("pack", "Pack"),
+]
+
+
+class ReliefStock(models.Model):
+    """New table, not in the original ERD. This is the actual "how much
+    is left in storage" the CSWD dashboard needs — one row per goods
+    type (rice / pack), holding the current quantity on hand. It's
+    incremented when goods are stored (cswd_add_relief_stock) and
+    decremented automatically whenever a ReliefDistribution record is
+    created (cswd_record_relief), so it always reflects what's actually
+    left, not what has gone out."""
+
+    goods_type = models.CharField(max_length=10, choices=RELIEF_GOODS_TYPE_CHOICES, unique=True)
+    quantity = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["goods_type"]
+
+    def __str__(self):
+        return f"{self.get_goods_type_display()}: {self.quantity} left"
+
+
+class ReliefDistribution(models.Model):
+    """Matches the ERD's relief_distribution entity (household_id,
+    disaster_type_id, quantity_given, distribution_date, tracking_number,
+    claim_status), with one addition: goods_type, so a release is either
+    "rice" or "pack" and can be matched back against ReliefStock. Creating
+    one of these deducts quantity_given from the matching ReliefStock row
+    — see cswd_record_relief."""
+
+    CLAIM_STATUS_CHOICES = [
+        ("claimed", "Claimed"),
+        ("pending", "Pending"),
+    ]
+
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="relief_records"
+    )
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="relief_distributions"
+    )
+    goods_type = models.CharField(max_length=10, choices=RELIEF_GOODS_TYPE_CHOICES)
+    quantity_given = models.PositiveIntegerField(default=0)
+    distribution_date = models.DateTimeField(default=timezone.now)
+    tracking_number = models.CharField(max_length=40, unique=True, blank=True)
+    claim_status = models.CharField(max_length=10, choices=CLAIM_STATUS_CHOICES, default="claimed")
+    distributed_by = models.CharField(max_length=150, blank=True)
+    remarks = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-distribution_date"]
+
+    def save(self, *args, **kwargs):
+        if not self.tracking_number:
+            self.tracking_number = f"RD-{timezone.now().strftime('%Y%m%d%H%M%S')}-{random.randint(100, 999)}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.household_id} — {self.goods_type} x{self.quantity_given}"
 
 
 class EvacuationRoute(models.Model):

@@ -180,9 +180,9 @@ const processSteps = [
   },
   {
     num: "02",
-    badge: "Local Leader",
+    badge: "Mobile App",
     title: "Purok Verification",
-    desc: "Your Purok President reviews and verifies your household details, then forwards it to the Barangay for final confirmation.",
+    desc: "Your Purok President reviews and verifies your household details through the mobile app, then forwards it to the Barangay for final confirmation.",
     icon: "checkCircle",
   },
   {
@@ -250,7 +250,7 @@ const servesRoles = [
   },
   {
     icon: "shield",
-    badge: "Mobile / Web",
+    badge: "Mobile App",
     title: "Purok Presidents",
     desc: "Review and verify household registrations from their purok before forwarding to Barangay.",
     className: "role-blue",
@@ -528,8 +528,8 @@ function Landing() {
       <section className="cta-band">
         <h2>Ready to Protect Your Community?</h2>
         <p>
-          Residents register and manage their household through the GeoAid mobile app.
-          Barangay, Purok, CSWD, and DRRM staff log in below.
+          Residents and Purok Presidents register and manage their household through the GeoAid mobile app.
+          Barangay, CSWD, and DRRM staff log in below.
         </p>
         <div className="cta-actions">
           <button type="button" className="btn-cta-secondary" onClick={goToLogin}>

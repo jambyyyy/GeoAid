@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl, Share, Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 // NOTE: paths below assume geoaid-mobile/src/components/... and
 // geoaid-mobile/src/api.js — since this file lives in qr-code/ (a sibling
 // of src/), adjust these three import paths if your src/ layout differs.
 import MobileShell from "../src/components/MobileShell";
-import { BackIcon, ShieldIcon } from "../src/components/icons";
+import { BackIcon, ShieldIcon, ShareIcon } from "../src/components/icons";
 import { API_BASE } from "../src/api";
 import QRCode from "./QRCode";
 
@@ -52,6 +52,20 @@ function QRCodeScreen({ navigation }) {
     setRefreshing(true);
     await load();
     setRefreshing(false);
+  };
+
+  const handleShareQR = async () => {
+    if (!selectedMember || !selectedToken) return;
+
+    try {
+      const message = `${selectedMember.name}'s GeoAid QR Code for evacuation check-in. Token: ${selectedToken}`;
+      await Share.share({
+        message: message,
+        title: "Share QR Code",
+      });
+    } catch (error) {
+      Alert.alert("Share Failed", "Unable to share QR code. Please try again.");
+    }
   };
 
   if (!data) {
@@ -106,10 +120,21 @@ function QRCodeScreen({ navigation }) {
 
           {selectedMember && selectedToken && (
             <View style={styles.featuredCard}>
-              <Text style={styles.featuredLabel}>
-                {selectedMember === headMember ? "Your Code" : "Selected Member"}
-              </Text>
-              <QRCode value={selectedToken} size={200} />
+              <View style={styles.featuredHeader}>
+                <Text style={styles.featuredLabel}>
+                  {selectedMember === headMember ? "Your Code" : "Selected Member"}
+                </Text>
+                <TouchableOpacity 
+                  style={styles.shareBtn}
+                  onPress={handleShareQR}
+                  accessibilityLabel="Share QR Code"
+                >
+                  <ShareIcon size={16} color="#2563eb" />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.qrContainer}>
+                <QRCode value={selectedToken} size={200} />
+              </View>
               <Text style={styles.featuredName}>{selectedMember.name}</Text>
               <Text style={styles.featuredRole}>{selectedMember.role}</Text>
               <View style={styles.hintRow}>
@@ -180,7 +205,27 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
+  featuredHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    width: "100%",
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  shareBtn: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: "#eaf3ff",
+  },
   featuredLabel: { fontSize: 12, fontWeight: "700", color: "#0b4a8f", textTransform: "uppercase", letterSpacing: 0.5 },
+  qrContainer: {
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
   featuredName: { fontSize: 16, fontWeight: "700", color: "#0b1f3a", marginTop: 8 },
   featuredRole: { fontSize: 12, color: "#6b7280" },
   hintRow: { flexDirection: "row", gap: 6, alignItems: "flex-start", marginTop: 10, paddingHorizontal: 20 },

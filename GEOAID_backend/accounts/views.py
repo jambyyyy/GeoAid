@@ -1,7 +1,7 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import Count, Q, ProtectedError, RestrictedError
+from django.db.models import Count, Q, Sum, ProtectedError, RestrictedError
 from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -10,7 +10,10 @@ from zoneinfo import ZoneInfo
 import json
 import uuid
 
-from .models import Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay, EvacuationRoute
+from .models import (
+    Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay,
+    EvacuationRoute, ReliefStock, ReliefDistribution, RELIEF_GOODS_TYPE_CHOICES,
+)
 from . import routing
 import re
 
@@ -313,10 +316,11 @@ def _priority_beneficiary_counts(households_qs):
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
     Purok President -> Barangay Staff review chain (status='confirmed').
-    Relief distribution doesn't have a backing model yet, so that stays
-    a clearly-labeled placeholder until that feature exists. Donations
-    are now backed by the Donation model (CSWD logs each drop-off
-    themselves from the Donations tab — see cswd_add_donation below)."""
+    Relief releases are backed by ReliefDistribution, and current
+    relief-goods stock (rice / pack) by ReliefStock — see
+    cswd_record_relief and cswd_add_relief_stock below. Donations are
+    backed by the Donation model (CSWD logs each drop-off themselves
+    from the Donations tab — see cswd_add_donation below)."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -337,16 +341,35 @@ def cswd_dashboard(request):
         | Q(is_four_ps=True)
     ).distinct().count()
 
+    # Recent relief releases, newest first — replaces the old placeholder
+    # that just listed every confirmed household as "Registered".
+    relief_qs = (
+        ReliefDistribution.objects
+        .select_related("household", "disaster_type")
+        .order_by("-distribution_date")[:50]
+    )
     relief_distribution = [
         {
-            "barangay": row["barangay"] or "Unspecified",
-            "families": row["total"],
-            # TODO: replace with a real ReliefDistribution model; for now
-            # every confirmed household is just "Registered" and awaiting
-            # an actual relief-goods disbursement record.
-            "status": "Registered",
+            "id": r.id,
+            "household_code": r.household.household_code,
+            "household": (r.household.full_name.split(" ")[-1] + " Family") if r.household.full_name else r.household.household_code,
+            "barangay": r.household.barangay or "Unspecified",
+            "goods_type": r.get_goods_type_display(),
+            "quantity": r.quantity_given,
+            "status": r.get_claim_status_display(),
+            "tracking_number": r.tracking_number,
+            "date": _format_ph(r.distribution_date, "%b %d, %Y"),
         }
-        for row in confirmed_qs.values("barangay").annotate(total=Count("id")).order_by("-total")
+        for r in relief_qs
+    ]
+
+    # Current relief-goods stock — what's actually left in storage, by
+    # type (rice / pack). Seeded to zero for both types by migration
+    # 0013; cswd_add_relief_stock restocks, cswd_record_relief deducts.
+    stock_by_type = {s.goods_type: s.quantity for s in ReliefStock.objects.all()}
+    relief_stock = [
+        {"goods_type": key, "label": label, "quantity": stock_by_type.get(key, 0)}
+        for key, label in RELIEF_GOODS_TYPE_CHOICES
     ]
 
     from .models import DisasterType
@@ -374,12 +397,13 @@ def cswd_dashboard(request):
     data = {
         "total_households": confirmed_qs.count(),
         "priority_cases": priority_cases,
-        # TODO: relief_released needs a real ReliefDistribution model —
-        # no such data exists yet.
-        "relief_released": 0,
+        # Total packs handed out across every release on record (not
+        # what's left — that's relief_stock below).
+        "relief_released": ReliefDistribution.objects.aggregate(total=Sum("quantity_given"))["total"] or 0,
         "donations": donations_qs.count(),
 
         "relief_distribution": relief_distribution,
+        "relief_stock": relief_stock,
         "priority_beneficiaries": priority,
         "donation_records": donation_records,
         "disaster_types": disaster_types,
@@ -481,6 +505,133 @@ def cswd_add_donation(request):
             "status": donation.status,
             "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
         },
+    })
+
+
+@csrf_exempt
+def cswd_add_relief_stock(request):
+    """Lets CSWD staff record relief goods being put into storage —
+    e.g. after a donation is sorted, or a fresh batch of sacks/packs
+    arrives. Adds to the existing ReliefStock row for that goods_type
+    rather than replacing it, so repeated restocks accumulate."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    goods_type = (payload.get("goods_type") or "").strip()
+    valid_types = dict(RELIEF_GOODS_TYPE_CHOICES)
+    if goods_type not in valid_types:
+        return JsonResponse({"message": f"Goods type must be one of: {', '.join(valid_types)}."}, status=400)
+
+    try:
+        quantity = int(payload.get("quantity"))
+        if quantity <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+
+    with transaction.atomic():
+        stock, _ = ReliefStock.objects.select_for_update().get_or_create(goods_type=goods_type)
+        stock.quantity += quantity
+        stock.save()
+
+    return JsonResponse({
+        "success": True,
+        "stock": {"goods_type": stock.goods_type, "label": valid_types[stock.goods_type], "quantity": stock.quantity},
+    })
+
+
+@csrf_exempt
+def cswd_record_relief(request):
+    """Logs a relief release to a household (the ERD's relief_distribution
+    entity) and deducts the released quantity from ReliefStock for that
+    goods_type. Fails with a 400 if there isn't enough of that goods
+    type left in storage, so stock can never go negative."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    household_code = (payload.get("household_code") or "").strip()
+    goods_type = (payload.get("goods_type") or "").strip()
+    remarks = (payload.get("remarks") or "").strip()
+    username = (payload.get("username") or "").strip()
+
+    if not household_code or not goods_type:
+        return JsonResponse({"message": "Household and goods type are required."}, status=400)
+
+    valid_types = dict(RELIEF_GOODS_TYPE_CHOICES)
+    if goods_type not in valid_types:
+        return JsonResponse({"message": f"Goods type must be one of: {', '.join(valid_types)}."}, status=400)
+
+    try:
+        quantity = int(payload.get("quantity"))
+        if quantity <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+
+    household = Household.objects.filter(household_code=household_code).first()
+    if not household:
+        return JsonResponse({"message": "Selected household was not found."}, status=400)
+
+    disaster_type = None
+    disaster_type_id = payload.get("disaster_type_id")
+    if disaster_type_id:
+        from .models import DisasterType
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
+        if not disaster_type:
+            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+
+    try:
+        with transaction.atomic():
+            stock = ReliefStock.objects.select_for_update().filter(goods_type=goods_type).first()
+            if not stock or stock.quantity < quantity:
+                left = stock.quantity if stock else 0
+                return JsonResponse({
+                    "message": f"Not enough {valid_types[goods_type]} left in storage (only {left} left).",
+                }, status=400)
+
+            stock.quantity -= quantity
+            stock.save()
+
+            relief = ReliefDistribution.objects.create(
+                household=household,
+                disaster_type=disaster_type,
+                goods_type=goods_type,
+                quantity_given=quantity,
+                distributed_by=username,
+                remarks=remarks,
+            )
+    except Exception as exc:
+        return JsonResponse({"message": f"Could not record this relief release: {exc}"}, status=400)
+
+    return JsonResponse({
+        "success": True,
+        "relief": {
+            "household_code": household.household_code,
+            "goods_type": relief.get_goods_type_display(),
+            "quantity": relief.quantity_given,
+            "tracking_number": relief.tracking_number,
+            "claim_status": relief.get_claim_status_display(),
+            "distributed_at": _format_ph(relief.distribution_date, "%b %d, %Y"),
+        },
+        "stock": {"goods_type": stock.goods_type, "label": valid_types[stock.goods_type], "quantity": stock.quantity},
     })
 
 

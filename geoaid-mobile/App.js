@@ -6,6 +6,11 @@ import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import EvacuationMapScreen from "./src/screens/EvacuationMapScreen";
 import QRCodeScreen from "./qr-code/QRCodeScreen";
+import RegistrationStatusScreen from "./src/screens/RegistrationStatusScreen";
+import ProfileScreen from "./src/screens/ProfileScreen";
+import ReliefDistributionScreen from "./src/screens/ReliefDistributionScreen";
+import EmergencyContactsScreen from "./src/screens/EmergencyContactsScreen";
+import PurokContactScreen from "./src/screens/PurokContactScreen";
 import StaffLoginScreen from "./staff/StaffLoginScreen";
 import StaffDashboardScreen from "./staff/StaffDashboardScreen";
 import ScannerScreen from "./staff/ScannerScreen";
@@ -24,6 +29,11 @@ export default function App() {
         <Stack.Screen name="Home" component={HomeScreen} />
         <Stack.Screen name="EvacuationMap" component={EvacuationMapScreen} />
         <Stack.Screen name="QRCode" component={QRCodeScreen} />
+        <Stack.Screen name="RegistrationStatus" component={RegistrationStatusScreen} />
+        <Stack.Screen name="Profile" component={ProfileScreen} />
+        <Stack.Screen name="ReliefDistribution" component={ReliefDistributionScreen} />
+        <Stack.Screen name="EmergencyContacts" component={EmergencyContactsScreen} />
+        <Stack.Screen name="PurokContact" component={PurokContactScreen} />
         <Stack.Screen name="StaffLogin" component={StaffLoginScreen} />
         <Stack.Screen
           name="StaffDashboard"

@@ -134,3 +134,39 @@ export function PlusIcon({ size = 16, color = "#2563eb" }) {
     </Svg>
   );
 }
+
+export function XIcon({ size = 18, color = "#dc2626" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M6 6l12 12M18 6L6 18" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function ShareIcon({ size = 18, color = "#2563eb" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="18" cy="5" r="3" stroke={color} strokeWidth="1.75" />
+      <Circle cx="6" cy="12" r="3" stroke={color} strokeWidth="1.75" />
+      <Circle cx="18" cy="19" r="3" stroke={color} strokeWidth="1.75" />
+      <Path d="M8.59 13.51l6.83-3.98M15.41 16.49l-6.82-3.98" stroke={color} strokeWidth="1.75" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function EditIcon({ size = 16, color = "#2563eb" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function SendIcon({ size = 16, color = "#2563eb" }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
