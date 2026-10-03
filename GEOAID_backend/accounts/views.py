@@ -12,7 +12,8 @@ import uuid
 
 from .models import (
     Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay,
-    EvacuationRoute, ReliefStock, ReliefDistribution, RELIEF_GOODS_TYPE_CHOICES,
+    EvacuationRoute, ReliefStock, ReliefDistribution,
+    goods_label, GOODS_TYPES,
 )
 from . import routing
 import re
@@ -312,6 +313,41 @@ def _priority_beneficiary_counts(households_qs):
     }
 
 
+def _attach_relief_summary(households):
+    """Adds relief_status / relief_count / relief_last_* to each household
+    payload for the CSWD Beneficiary Checklist, based on its
+    ReliefDistribution records (cancelled releases are ignored)."""
+
+    codes = [h["id"] for h in households]
+    by_code = {}
+    for r in (
+        ReliefDistribution.objects
+        .filter(household__household_code__in=codes)
+        .exclude(claim_status="cancelled")
+        .select_related("household")
+        .order_by("-distribution_date", "-id")
+    ):
+        by_code.setdefault(r.household.household_code, []).append(r)
+
+    for h in households:
+        records = by_code.get(h["id"], [])
+        claimed = [r for r in records if r.claim_status == "claimed"]
+        if any(r.claim_status == "ready" for r in records):
+            h["relief_status"] = "Ready for Pickup"
+        elif any(r.claim_status in ("processing", "pending") for r in records):
+            h["relief_status"] = "Processing"
+        elif claimed:
+            h["relief_status"] = "Relief Given"
+        else:
+            h["relief_status"] = "Not Yet Given"
+        h["relief_count"] = len(claimed)
+        last = claimed[0] if claimed else None
+        h["relief_last_goods"] = last.get_goods_type_display() if last else ""
+        h["relief_last_quantity"] = last.quantity_given if last else 0
+        h["relief_last_date"] = _format_ph(last.distribution_date, "%b %d, %Y") if last else ""
+    return households
+
+
 @csrf_exempt
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
@@ -357,19 +393,28 @@ def cswd_dashboard(request):
             "goods_type": r.get_goods_type_display(),
             "quantity": r.quantity_given,
             "status": r.get_claim_status_display(),
+            "claim_status": r.claim_status,
             "tracking_number": r.tracking_number,
+            "remarks": r.remarks,
             "date": _format_ph(r.distribution_date, "%b %d, %Y"),
+            "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
         }
         for r in relief_qs
     ]
 
-    # Current relief-goods stock — what's actually left in storage, by
-    # type (rice / pack). Seeded to zero for both types by migration
-    # 0013; cswd_add_relief_stock restocks, cswd_record_relief deducts.
-    stock_by_type = {s.goods_type: s.quantity for s in ReliefStock.objects.all()}
+    # Current relief-goods stock — what's actually left in storage. Only
+    # two types exist: rice and pack (a pack holds all the other goods).
+    # Both rows are created at zero if missing; cswd_add_relief_stock
+    # restocks, cswd_record_relief deducts.
+    for g in GOODS_TYPES:
+        if not ReliefStock.objects.filter(goods_type__iexact=g).exists():
+            ReliefStock.objects.create(goods_type=g, quantity=0)
     relief_stock = [
-        {"goods_type": key, "label": label, "quantity": stock_by_type.get(key, 0)}
-        for key, label in RELIEF_GOODS_TYPE_CHOICES
+        {"goods_type": s.goods_type, "label": s.get_goods_type_display(), "quantity": s.quantity}
+        for s in sorted(
+            (s for s in ReliefStock.objects.all() if s.goods_type.lower() in GOODS_TYPES),
+            key=lambda s: GOODS_TYPES.index(s.goods_type.lower()),
+        )
     ]
 
     from .models import DisasterType
@@ -424,10 +469,28 @@ def cswd_dashboard(request):
             for c in EvacuationCenter.objects.all().order_by("barangay", "name")
         ],
 
-        "households": _serialize_households(confirmed_qs),
+        "households": _attach_relief_summary(_serialize_households(confirmed_qs)),
     }
 
     return JsonResponse(data)
+
+
+def _clean_goods_name(text):
+    """Normalises a goods type to "rice" or "pack" (case/space
+    insensitive). Returns "" for anything else, so callers can reject it."""
+    name = " ".join((text or "").split()).lower()
+    return name if name in GOODS_TYPES else ""
+
+
+def _stock_for_goods(goods_name, create=True):
+    """Finds the storage row (ReliefStock) for a goods type, matching
+    case-insensitively so "can goods" and "Can Goods" are one item. Creates
+    a new row for a goods type that has never been stored before.
+    Call inside transaction.atomic() so the row is locked."""
+    stock = ReliefStock.objects.select_for_update().filter(goods_type__iexact=goods_name).first()
+    if stock is None and create:
+        stock = ReliefStock.objects.create(goods_type=goods_name, quantity=0)
+    return stock
 
 
 @csrf_exempt
@@ -453,8 +516,11 @@ def cswd_add_donation(request):
     quantity = payload.get("quantity")
     status = (payload.get("status") or "pending").strip()
 
+    goods_name = _clean_goods_name(goods_type)
     if not donor_name or not goods_type:
         return JsonResponse({"message": "Donor name and goods type are required."}, status=400)
+    if not goods_name:
+        return JsonResponse({"message": "Goods type must be Rice or Pack."}, status=400)
 
     try:
         quantity = int(quantity)
@@ -483,18 +549,35 @@ def cswd_add_donation(request):
         if not disaster_type:
             return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
 
-    donation = Donation.objects.create(
-        donor_name=donor_name,
-        contact_num=(payload.get("contact_num") or "").strip(),
-        goods_type=goods_type,
-        quantity=quantity,
-        donation_date=donation_date,
-        status=status,
-        disaster_type=disaster_type,
-    )
+    # Goods that are logged here go straight into storage (ReliefStock)
+    # under the goods type that was typed, unless the donation is already
+    # "distributed" (it has left storage) or has no quantity.
+    stock = None
+    stored = status != "distributed" and quantity > 0
+
+    with transaction.atomic():
+        donation = Donation.objects.create(
+            donor_name=donor_name,
+            contact_num=(payload.get("contact_num") or "").strip(),
+            goods_type=goods_name,
+            quantity=quantity,
+            donation_date=donation_date,
+            status=status,
+            disaster_type=disaster_type,
+        )
+
+        if stored:
+            stock = _stock_for_goods(goods_name)
+            stock.quantity += quantity
+            stock.save()
 
     return JsonResponse({
         "success": True,
+        "stored_in_inventory": stored,
+        "stock": (
+            {"goods_type": stock.goods_type, "label": stock.get_goods_type_display(), "quantity": stock.quantity}
+            if stock else None
+        ),
         "donation": {
             "id": donation.id,
             "donor_name": donation.donor_name,
@@ -526,10 +609,9 @@ def cswd_add_relief_stock(request):
     except json.JSONDecodeError:
         return JsonResponse({"message": "Invalid JSON body."}, status=400)
 
-    goods_type = (payload.get("goods_type") or "").strip()
-    valid_types = dict(RELIEF_GOODS_TYPE_CHOICES)
-    if goods_type not in valid_types:
-        return JsonResponse({"message": f"Goods type must be one of: {', '.join(valid_types)}."}, status=400)
+    goods_type = _clean_goods_name(payload.get("goods_type"))
+    if not goods_type:
+        return JsonResponse({"message": "Goods type must be Rice or Pack."}, status=400)
 
     try:
         quantity = int(payload.get("quantity"))
@@ -539,13 +621,13 @@ def cswd_add_relief_stock(request):
         return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
 
     with transaction.atomic():
-        stock, _ = ReliefStock.objects.select_for_update().get_or_create(goods_type=goods_type)
+        stock = _stock_for_goods(goods_type)
         stock.quantity += quantity
         stock.save()
 
     return JsonResponse({
         "success": True,
-        "stock": {"goods_type": stock.goods_type, "label": valid_types[stock.goods_type], "quantity": stock.quantity},
+        "stock": {"goods_type": stock.goods_type, "label": stock.get_goods_type_display(), "quantity": stock.quantity},
     })
 
 
@@ -568,16 +650,12 @@ def cswd_record_relief(request):
         return JsonResponse({"message": "Invalid JSON body."}, status=400)
 
     household_code = (payload.get("household_code") or "").strip()
-    goods_type = (payload.get("goods_type") or "").strip()
+    goods_type = _clean_goods_name(payload.get("goods_type"))
     remarks = (payload.get("remarks") or "").strip()
     username = (payload.get("username") or "").strip()
 
     if not household_code or not goods_type:
-        return JsonResponse({"message": "Household and goods type are required."}, status=400)
-
-    valid_types = dict(RELIEF_GOODS_TYPE_CHOICES)
-    if goods_type not in valid_types:
-        return JsonResponse({"message": f"Goods type must be one of: {', '.join(valid_types)}."}, status=400)
+        return JsonResponse({"message": "Household and goods type (Rice or Pack) are required."}, status=400)
 
     try:
         quantity = int(payload.get("quantity"))
@@ -600,11 +678,11 @@ def cswd_record_relief(request):
 
     try:
         with transaction.atomic():
-            stock = ReliefStock.objects.select_for_update().filter(goods_type=goods_type).first()
+            stock = _stock_for_goods(goods_type, create=False)
             if not stock or stock.quantity < quantity:
                 left = stock.quantity if stock else 0
                 return JsonResponse({
-                    "message": f"Not enough {valid_types[goods_type]} left in storage (only {left} left).",
+                    "message": f"Not enough {goods_type} left in storage (only {left} left).",
                 }, status=400)
 
             stock.quantity -= quantity
@@ -613,7 +691,7 @@ def cswd_record_relief(request):
             relief = ReliefDistribution.objects.create(
                 household=household,
                 disaster_type=disaster_type,
-                goods_type=goods_type,
+                goods_type=stock.goods_type,
                 quantity_given=quantity,
                 distributed_by=username,
                 remarks=remarks,
@@ -628,10 +706,81 @@ def cswd_record_relief(request):
             "goods_type": relief.get_goods_type_display(),
             "quantity": relief.quantity_given,
             "tracking_number": relief.tracking_number,
-            "claim_status": relief.get_claim_status_display(),
+            "id": relief.id,
+            "claim_status": relief.claim_status,
+            "claim_status_label": relief.get_claim_status_display(),
             "distributed_at": _format_ph(relief.distribution_date, "%b %d, %Y"),
         },
-        "stock": {"goods_type": stock.goods_type, "label": valid_types[stock.goods_type], "quantity": stock.quantity},
+        "stock": {"goods_type": stock.goods_type, "label": stock.get_goods_type_display(), "quantity": stock.quantity},
+    })
+
+
+@csrf_exempt
+def cswd_update_relief_status(request):
+    """Lets CSWD staff move an open relief release between "processing"
+    and "ready" (for pickup). Marking a release as claimed is NOT
+    possible here — only the resident can do that, by confirming receipt
+    in the mobile app (resident_confirm_relief). Once a release is
+    claimed it is locked and CSWD can no longer edit it."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    new_status = (payload.get("status") or "").strip()
+    username = (payload.get("username") or "").strip()
+
+    if new_status == "claimed":
+        return JsonResponse({
+            "message": "Only the resident can confirm receipt of their relief goods in the mobile app.",
+        }, status=400)
+
+    if new_status not in ("processing", "ready"):
+        return JsonResponse({"message": "Status must be processing or ready."}, status=400)
+
+    try:
+        relief_id = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "A valid relief release id is required."}, status=400)
+
+    with transaction.atomic():
+        relief = (
+            ReliefDistribution.objects.select_for_update()
+            .select_related("household").filter(id=relief_id).first()
+        )
+        if not relief:
+            return JsonResponse({"message": "Relief release not found."}, status=404)
+
+        if relief.claim_status == "claimed":
+            return JsonResponse({
+                "message": "The resident already confirmed receiving this relief, so it can no longer be edited.",
+            }, status=400)
+
+        if relief.claim_status == "cancelled":
+            return JsonResponse({"message": "This release was cancelled and can't be changed."}, status=400)
+
+        if new_status == relief.claim_status:
+            return JsonResponse({"message": "Release is already in that status."}, status=400)
+
+        relief.claim_status = new_status
+        relief.status_updated_by = username
+        relief.save()
+
+    return JsonResponse({
+        "success": True,
+        "relief": {
+            "id": relief.id,
+            "household_code": relief.household.household_code,
+            "claim_status": relief.claim_status,
+            "status": relief.get_claim_status_display(),
+        },
     })
 
 
@@ -2614,3 +2763,258 @@ def resident_dashboard(request):
     }
 
     return JsonResponse(data)
+
+
+@csrf_exempt
+def resident_registration_status(request):
+    """Used by RegistrationStatusScreen.js — returns the household's
+    current review status (pending / approved / confirmed / rejected)
+    plus the basic household details the screen displays."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    mobile_number = (request.GET.get("mobile_number") or "").strip()
+
+    household = Household.objects.filter(mobile_number=mobile_number).first()
+    if not household:
+        return JsonResponse({"success": False, "message": "Household not found."}, status=404)
+
+    return JsonResponse({
+        "success": True,
+        "status": household.status,
+        "household": {
+            "household_code": household.household_code,
+            "barangay": household.barangay,
+            "purok": household.purok,
+            "submitted": _format_ph(household.created_at, "%b %d, %Y"),
+        },
+    })
+
+
+@csrf_exempt
+def resident_relief_distribution(request):
+    """Used by ReliefDistributionScreen.js — the household's relief
+    releases (ReliefDistribution). Inventory/stock levels are CSWD-side
+    only and are intentionally not exposed here. Cancelled releases are
+    hidden from the resident."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    mobile_number = (request.GET.get("mobile_number") or "").strip()
+
+    household = Household.objects.filter(mobile_number=mobile_number).first()
+    if not household:
+        return JsonResponse({"success": False, "message": "Household not found."}, status=404)
+
+    records = list(
+        ReliefDistribution.objects
+        .filter(household=household)
+        .exclude(claim_status="cancelled")
+        .order_by("-distribution_date", "-id")
+    )
+
+    def _serialize(r):
+        return {
+            "id": r.id,
+            "date": _format_ph(r.distribution_date, "%b %d, %Y"),
+            "goods_type": r.get_goods_type_display(),
+            "quantity": r.quantity_given,
+            "status": r.claim_status,
+            "distributed_by": r.distributed_by,
+            "tracking_number": r.tracking_number,
+            "remarks": r.remarks,
+            "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
+        }
+
+    history = [_serialize(r) for r in records]
+    last_claimed = next((r for r in records if r.claim_status == "claimed"), None)
+
+    # Headline status for the top card: something to pick up first, then
+    # something being prepared, then what was already received.
+    if any(r.claim_status == "ready" for r in records):
+        status = "ready"
+    elif any(r.claim_status in ("processing", "pending") for r in records):
+        status = "processing"
+    elif last_claimed:
+        status = "received"
+    elif household.status == "confirmed":
+        status = "pending"  # eligible, waiting for an allocation
+    else:
+        status = "not_eligible"
+
+    return JsonResponse({
+        "success": True,
+        "status": status,
+        "last_distribution": _serialize(last_claimed) if last_claimed else None,
+        "distribution_history": history,
+    })
+
+
+@csrf_exempt
+def resident_confirm_relief(request):
+    """Used by ReliefDistributionScreen.js — the resident confirms in the
+    app that their household received the relief goods. Only a release
+    CSWD has marked "ready" for pickup can be confirmed (not one that is
+    still processing), and only by the household it belongs to."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    mobile_number = (payload.get("mobile_number") or "").strip()
+    household = Household.objects.filter(mobile_number=mobile_number).first()
+    if not household:
+        return JsonResponse({"success": False, "message": "Household not found."}, status=404)
+
+    try:
+        relief_id = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"success": False, "message": "A valid relief release id is required."}, status=400)
+
+    with transaction.atomic():
+        relief = (
+            ReliefDistribution.objects.select_for_update()
+            .filter(id=relief_id, household=household).first()
+        )
+        if not relief:
+            return JsonResponse({"success": False, "message": "Relief release not found."}, status=404)
+
+        if relief.claim_status == "claimed":
+            return JsonResponse({"success": False, "message": "You already confirmed receiving this relief."}, status=400)
+
+        if relief.claim_status == "cancelled":
+            return JsonResponse({"success": False, "message": "This relief release was cancelled."}, status=400)
+
+        if relief.claim_status != "ready":
+            return JsonResponse({
+                "success": False,
+                "message": "Your relief is still being processed. You can confirm receipt once CSWD marks it Ready for Pickup.",
+            }, status=400)
+
+        relief.claim_status = "claimed"
+        relief.claimed_at = timezone.now()
+        relief.status_updated_by = "resident"
+        relief.save()
+
+    return JsonResponse({
+        "success": True,
+        "message": "Thank you! Your relief receipt has been confirmed.",
+        "relief": {
+            "id": relief.id,
+            "status": relief.claim_status,
+            "claimed_at": _format_ph(relief.claimed_at, "%b %d, %Y %I:%M %p"),
+        },
+    })
+
+
+def _serialize_profile(household):
+    """Shape ProfileScreen.js reads: household info, contact info, and
+    the household's members with vulnerability flags."""
+    members = []
+    for m in household.family_members.all():
+        flags = []
+        if m.is_pwd:
+            flags.append("PWD")
+        if m.is_pregnant:
+            flags.append("Pregnant")
+        if m.is_elderly:
+            flags.append("Elderly")
+        if m.is_child_under5:
+            flags.append("Child<5")
+        if household.is_four_ps:
+            flags.append("4Ps")
+        members.append({
+            "full_name": m.full_name,
+            "relation": "Head of Household" if m.relation == "Head" else m.relation,
+            "age": m.age,
+            "flags": flags,
+        })
+
+    return {
+        "household_code": household.household_code,
+        "barangay": household.barangay,
+        "purok": household.purok,
+        "status": household.status,
+        "full_name": household.full_name,
+        "mobile_number": household.mobile_number,
+        "address_line": household.address_line,
+        "landmark": household.landmark,
+        "members": members,
+    }
+
+
+@csrf_exempt
+def resident_profile(request):
+    """Used by ProfileScreen.js — the resident's household profile.
+    Works for every registration status (pending / approved / confirmed /
+    rejected), unlike resident_dashboard, so residents can always see
+    where their registration stands."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "GET":
+        return JsonResponse({"message": "GET required."}, status=405)
+
+    mobile_number = (request.GET.get("mobile_number") or "").strip()
+    household = (
+        Household.objects.filter(mobile_number=mobile_number)
+        .prefetch_related("family_members")
+        .first()
+    )
+    if not household:
+        return JsonResponse({"success": False, "message": "Household not found."}, status=404)
+
+    return JsonResponse(_serialize_profile(household))
+
+
+@csrf_exempt
+def resident_profile_update(request):
+    """Used by ProfileScreen.js — updates full name, address and landmark.
+    The mobile number is the resident's login ID, so it is never changed
+    here even if the app sends a different one."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    mobile_number = (payload.get("mobile_number") or "").strip()
+    household = (
+        Household.objects.filter(mobile_number=mobile_number)
+        .prefetch_related("family_members")
+        .first()
+    )
+    if not household:
+        return JsonResponse({"success": False, "message": "Household not found."}, status=404)
+
+    if "full_name" in payload:
+        full_name = (payload.get("full_name") or "").strip()
+        if not full_name:
+            return JsonResponse({"message": "Full name can't be empty."}, status=400)
+        if len(full_name) > 150:
+            return JsonResponse({"message": "Full name is too long (150 characters max)."}, status=400)
+        household.full_name = full_name
+
+    for field in ("address_line", "landmark"):
+        if field in payload:
+            value = (payload.get(field) or "").strip()
+            if len(value) > 255:
+                return JsonResponse({"message": f"{field.replace('_', ' ').capitalize()} is too long (255 characters max)."}, status=400)
+            setattr(household, field, value)
+
+    household.save()
+    return JsonResponse(_serialize_profile(household))

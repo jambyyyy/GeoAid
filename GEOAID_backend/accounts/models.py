@@ -344,26 +344,33 @@ class Donation(models.Model):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
 
 
-# Shared by ReliefStock and ReliefDistribution below. Per Dashhh's call,
-# relief goods aren't tracked by free-text goods_type like Donation is —
-# they're bucketed into just two kinds: "rice" (tracked on its own) and
-# "pack" (every other kind of relief good, counted as one generic pack).
-RELIEF_GOODS_TYPE_CHOICES = [
-    ("rice", "Rice"),
-    ("pack", "Pack"),
-]
+# Relief goods come in only two kinds: "rice" and "pack". A pack holds
+# all the other goods (canned goods, noodles, ...), so there is no
+# separate storage row for them. Names are matched case-insensitively
+# in the views; the label helper below capitalises them for display.
+GOODS_TYPES = ("rice", "pack")
 
 
-class ReliefStock(models.Model):
-    """New table, not in the original ERD. This is the actual "how much
-    is left in storage" the CSWD dashboard needs — one row per goods
-    type (rice / pack), holding the current quantity on hand. It's
-    incremented when goods are stored (cswd_add_relief_stock) and
-    decremented automatically whenever a ReliefDistribution record is
-    created (cswd_record_relief), so it always reflects what's actually
-    left, not what has gone out."""
+def goods_label(value):
+    value = (value or "").strip()
+    return value[:1].upper() + value[1:]
 
-    goods_type = models.CharField(max_length=10, choices=RELIEF_GOODS_TYPE_CHOICES, unique=True)
+
+class GoodsLabelMixin:
+    """Gives get_goods_type_display() for the rice / pack goods types."""
+
+    def get_goods_type_display(self):
+        return goods_label(self.goods_type)
+
+
+class ReliefStock(GoodsLabelMixin, models.Model):
+    """Simple relief-goods storage: one row per goods type (rice, pack,
+    ...), holding the quantity currently on hand. It goes up when goods
+    are stored (cswd_add_relief_stock, cswd_add_donation) and down
+    whenever a ReliefDistribution record is created
+    (cswd_record_relief). There is no separate movement history."""
+
+    goods_type = models.CharField(max_length=100, unique=True)
     quantity = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -374,7 +381,7 @@ class ReliefStock(models.Model):
         return f"{self.get_goods_type_display()}: {self.quantity} left"
 
 
-class ReliefDistribution(models.Model):
+class ReliefDistribution(GoodsLabelMixin, models.Model):
     """Matches the ERD's relief_distribution entity (household_id,
     disaster_type_id, quantity_given, distribution_date, tracking_number,
     claim_status), with one addition: goods_type, so a release is either
@@ -382,8 +389,16 @@ class ReliefDistribution(models.Model):
     one of these deducts quantity_given from the matching ReliefStock row
     — see cswd_record_relief."""
 
+    # Lifecycle: CSWD records a release (processing) -> marks it ready for
+    # pickup (ready) -> the resident confirms in the mobile app that they
+    # got it (claimed). CSWD can also cancel an open release, which puts
+    # the goods back into stock. "pending" is kept only so older rows
+    # created before this workflow still display correctly.
     CLAIM_STATUS_CHOICES = [
+        ("processing", "Processing"),
+        ("ready", "Ready for Pickup"),
         ("claimed", "Claimed"),
+        ("cancelled", "Cancelled"),
         ("pending", "Pending"),
     ]
 
@@ -394,11 +409,16 @@ class ReliefDistribution(models.Model):
         DisasterType, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="relief_distributions"
     )
-    goods_type = models.CharField(max_length=10, choices=RELIEF_GOODS_TYPE_CHOICES)
+    goods_type = models.CharField(max_length=100)
     quantity_given = models.PositiveIntegerField(default=0)
     distribution_date = models.DateTimeField(default=timezone.now)
     tracking_number = models.CharField(max_length=40, unique=True, blank=True)
-    claim_status = models.CharField(max_length=10, choices=CLAIM_STATUS_CHOICES, default="claimed")
+    claim_status = models.CharField(max_length=10, choices=CLAIM_STATUS_CHOICES, default="processing")
+    # Set when the release is marked claimed (by the resident in the
+    # mobile app, or by CSWD).
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    # Who last changed claim_status ("resident" when confirmed in the app).
+    status_updated_by = models.CharField(max_length=150, blank=True)
     distributed_by = models.CharField(max_length=150, blank=True)
     remarks = models.CharField(max_length=255, blank=True)
 

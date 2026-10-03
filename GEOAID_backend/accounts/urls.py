@@ -5,6 +5,7 @@ from .views import (
     cswd_add_donation,
     cswd_add_relief_stock,
     cswd_record_relief,
+    cswd_update_relief_status,
     drrm_dashboard,
     drrm_routes,
     drrm_disaster_types,
@@ -29,6 +30,11 @@ from .views import (
     login_resident,
     resident_dashboard,
     resident_nearest_route,
+    resident_registration_status,
+    resident_relief_distribution,
+    resident_confirm_relief,
+    resident_profile,
+    resident_profile_update,
 )
 
 urlpatterns = [
@@ -37,6 +43,7 @@ urlpatterns = [
     path("cswd/donations/add/", cswd_add_donation),
     path("cswd/relief/stock/add/", cswd_add_relief_stock),
     path("cswd/relief/record/", cswd_record_relief),
+    path("cswd/relief/status/", cswd_update_relief_status),
     path("drrm/dashboard/", drrm_dashboard),
     path("drrm/routes/", drrm_routes),
     path("drrm/disaster-types/", drrm_disaster_types),
@@ -63,4 +70,9 @@ urlpatterns = [
     path("resident/login/", login_resident),
     path("resident/dashboard/", resident_dashboard),
     path("resident/evacuation/nearest-route/", resident_nearest_route),
+    path("resident/registration-status/", resident_registration_status),
+    path("resident/relief-distribution/", resident_relief_distribution),
+    path("resident/relief-distribution/confirm/", resident_confirm_relief),
+    path("resident/profile/", resident_profile),
+    path("resident/profile/update/", resident_profile_update),
 ]

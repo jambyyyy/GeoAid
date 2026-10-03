@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, TextInput } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import { BackIcon, PhoneIcon, SendIcon } from "../components/icons";
@@ -101,16 +102,16 @@ function PurokContactScreen({ navigation }) {
   if (loading) {
     return (
       <MobileShell>
-        <View style={styles.loading}>
+        <SafeAreaView style={styles.loading} edges={["top", "bottom"]}>
           <Text>Loading purok information…</Text>
-        </View>
+        </SafeAreaView>
       </MobileShell>
     );
   }
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity 
             style={styles.backBtn} 
@@ -211,7 +212,7 @@ function PurokContactScreen({ navigation }) {
             </>
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }

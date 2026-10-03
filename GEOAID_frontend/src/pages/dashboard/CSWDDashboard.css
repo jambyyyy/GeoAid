@@ -105,11 +105,12 @@
 
 .content-grid {
     display: grid;
-    grid-template-columns: 1.4fr 1fr;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
     gap: 20px;
 }
 
 .panel {
+    min-width: 0;
     padding: 24px;
     border-radius: 16px;
     background: #fff;
@@ -186,6 +187,14 @@
     grid-column: 1 / -1;
     display: flex;
     justify-content: flex-end;
+}
+
+/* Success / info notes inside a form span the full width instead of
+   taking up one grid cell and pushing the fields around. */
+.donation-form .panel-note {
+    grid-column: 1 / -1;
+    color: #047857;
+    font-weight: 600;
 }
 
 .donation-form-error {
@@ -507,7 +516,16 @@
 .status-released,
 .status-completed { background: #d1fae5; color: #047857; }
 
-.status-pending { background: #fef3c7; color: #b45309; }
+.status-pending,
+.status-processing { background: #fef3c7; color: #b45309; }
+
+.status-ready,
+.status-ready-for-pickup { background: #dbeafe; color: #1d4ed8; }
+
+.status-relief-given { background: #d1fae5; color: #047857; }
+
+.status-not-yet-given,
+.status-cancelled { background: #fee2e2; color: #b91c1c; }
 
 .status-rejected,
 .status-unclaimed,
@@ -620,4 +638,200 @@
     font-size: 12px;
     color: #64748b;
     font-weight: 600;
+}
+
+/* ---------- Relief Distribution tab (compact layout) ---------- */
+
+.relief-tab {
+    gap: 14px;
+    align-items: start;
+}
+
+.relief-tab > .panel {
+    padding: 14px 16px;
+}
+
+.relief-tab > .relief-wide {
+    grid-column: 1 / -1;
+}
+
+.relief-tab .panel h2 {
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.relief-tab .panel-note {
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+
+.relief-tab .donation-form {
+    gap: 10px;
+}
+
+.relief-tab .donation-form-field {
+    gap: 4px;
+}
+
+.relief-tab .donation-form-field input,
+.relief-tab .donation-form-field select {
+    height: 34px;
+    padding: 6px 10px;
+}
+
+.relief-tab .goods-selection-scroll {
+    max-height: 120px;
+    gap: 6px;
+    padding: 6px;
+}
+
+.relief-tab .goods-option {
+    padding: 6px 10px;
+}
+
+.relief-tab .action-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.relief-tab .data-table {
+    font-size: 13px;
+}
+
+.relief-tab .data-table th,
+.relief-tab .data-table td {
+    padding: 7px 10px;
+}
+
+/* Long release list scrolls inside its own panel, header stays put. */
+.releases-scroll {
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+.releases-scroll .data-table thead th {
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 1;
+}
+
+.relief-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.relief-btn {
+    padding: 5px 10px;
+    border: 1px solid #2563eb;
+    border-radius: 6px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.relief-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+}
+
+.relief-btn.outline {
+    background: #fff;
+    color: #1d4ed8;
+    border-color: #bfdbfe;
+}
+
+.relief-btn.outline:hover:not(:disabled) {
+    background: #eff6ff;
+}
+
+.relief-btn.secondary {
+    background: #fff;
+    color: #b91c1c;
+    border-color: #fecaca;
+}
+
+.relief-btn.secondary:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
+.relief-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.relief-done {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.relief-received-at {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #64748b;
+}
+
+/* Processing / Ready for Pickup toggle in the Relief Releases table */
+.relief-seg {
+    display: inline-flex;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.relief-seg-btn {
+    padding: 5px 12px;
+    border: none;
+    background: #fff;
+    color: #1d4ed8;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.relief-seg-btn + .relief-seg-btn {
+    border-left: 1px solid #bfdbfe;
+}
+
+.relief-seg-btn:hover:not(.active):not(:disabled) {
+    background: #eff6ff;
+}
+
+.relief-seg-btn.active {
+    background: #2563eb;
+    color: #fff;
+    cursor: default;
+}
+
+.relief-seg-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.panel-wide {
+    grid-column: 1 / -1;
+}
+
+.field-hint {
+    font-size: 11px;
+    color: #64748b;
+    line-height: 1.4;
+}
+
+.goods-option.out-of-stock {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.goods-option.out-of-stock:hover {
+    border-color: #e2e8f0;
+    background: #fff;
 }

@@ -29,7 +29,7 @@ const sectionInfo = {
   "Households": { title: "Households", subtitle: "Registered households under CSWD monitoring" },
   "Vulnerability Profiles": { title: "Vulnerability Profiles", subtitle: "Senior citizens, PWD, pregnant women, and children under 5 — ranked by priority level" },
   "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy across active evacuation sites" },
-  "Donations": { title: "Donations", subtitle: "Inventory of donated goods available for distribution" },
+  "Donations": { title: "Donations", subtitle: "Donated goods available for distribution" },
   "Reports": { title: "Reports", subtitle: "Relief, vulnerability, and situation reports" },
   "Settings": { title: "Settings", subtitle: "Manage your CSWD account preferences" },
 };
@@ -40,6 +40,27 @@ const REPORT_TYPE_LABELS = {
   situation: "Situation",
   disaster_monitoring: "Disaster Monitoring",
 };
+
+// Relief release lifecycle: CSWD moves a release through these; the
+// resident confirms receipt in the mobile app (-> "claimed").
+// The only statuses CSWD can set. "Claimed" comes from the resident.
+const RELIEF_ACTIONS = [
+  { value: "processing", label: "Processing" },
+  { value: "ready", label: "Ready for Pickup" },
+];
+
+const RELIEF_STATUS_OPTIONS = [
+  { value: "processing", label: "Processing" },
+  { value: "ready", label: "Ready for Pickup" },
+  { value: "claimed", label: "Claimed" },
+  { value: "cancelled", label: "Cancelled" },
+];
+
+function ReliefStatusBadge({ value, label }) {
+  const key = String(value || "").toLowerCase();
+  const text = label || RELIEF_STATUS_OPTIONS.find((o) => o.value === key)?.label || value;
+  return <span className={`status-badge status-${key}`}>{text}</span>;
+}
 
 const PRIORITY_CLASS = {
   High: "priority-high",
@@ -78,6 +99,7 @@ function CSWDDashboard() {
   });
   const [isSubmittingDonation, setIsSubmittingDonation] = useState(false);
   const [donationFormError, setDonationFormError] = useState("");
+  const [donationFormSuccess, setDonationFormSuccess] = useState("");
 
   const [reliefForm, setReliefForm] = useState({
     household_code: "",
@@ -89,6 +111,9 @@ function CSWDDashboard() {
   const [isSubmittingRelief, setIsSubmittingRelief] = useState(false);
   const [reliefFormError, setReliefFormError] = useState("");
   const [reliefFormSuccess, setReliefFormSuccess] = useState("");
+
+  const [updatingReliefId, setUpdatingReliefId] = useState(null);
+  const [reliefStatusError, setReliefStatusError] = useState("");
 
   const [stockForm, setStockForm] = useState({ goods_type: "", quantity: "" });
   const [isSubmittingStock, setIsSubmittingStock] = useState(false);
@@ -105,27 +130,58 @@ function CSWDDashboard() {
   const [reportFormError, setReportFormError] = useState("");
   const [expandedReportId, setExpandedReportId] = useState(null);
 
+  const fetchDashboard = async () => {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/cswd/dashboard/`
+      );
+
+      const data = await response.json();
+
+      setDashboardData(data);
+      setDonationRecords(data.donation_records || []);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load dashboard data.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        const response = await fetch(
-          `${API_URL}/api/cswd/dashboard/`
-        );
-
-        const data = await response.json();
-
-        setDashboardData(data);
-        setDonationRecords(data.donation_records || []);
-      } catch (err) {
-        console.error(err);
-        setError("Failed to load dashboard data.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchDashboard();
   }, []);
+
+  // CSWD switches an open relief release between Processing and Ready
+  // for Pickup. "Claimed" is set only by the resident in the mobile app,
+  // after which the release is locked here.
+  const handleReliefStatusChange = async (item, newStatus) => {
+    if (newStatus === item.claim_status) return;
+
+    setReliefStatusError("");
+    setUpdatingReliefId(item.id);
+    try {
+      const response = await fetch(`${API_URL}/api/cswd/relief/status/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: item.id, status: newStatus, username }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        setReliefStatusError(data.message || "Could not update this relief release.");
+        return;
+      }
+
+      await fetchDashboard();
+    } catch (err) {
+      console.error(err);
+      setReliefStatusError("Unable to connect to the server.");
+    } finally {
+      setUpdatingReliefId(null);
+    }
+  };
 
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
@@ -134,12 +190,14 @@ function CSWDDashboard() {
   };
 
   const handleDonationFieldChange = (field, value) => {
+    setDonationFormSuccess("");
     setDonationForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleAddDonation = async (e) => {
     e.preventDefault();
     setDonationFormError("");
+    setDonationFormSuccess("");
 
     if (!donationForm.donor_name.trim() || !donationForm.goods_type.trim() || !donationForm.quantity) {
       setDonationFormError("Donor name, goods type, and quantity are required.");
@@ -161,8 +219,14 @@ function CSWDDashboard() {
         return;
       }
 
-      setDonationRecords((prev) => [data.donation, ...prev]);
+      // Refetch so donation records and storage stock reflect the new donation.
+      await fetchDashboard();
       setDonationPage(1);
+      setDonationFormSuccess(
+        data.stored_in_inventory && data.stock
+          ? `Donation logged. ${data.donation.quantity} added to ${data.stock.label} storage — now ${data.stock.quantity} in storage.`
+          : "Donation logged (not added to storage because it is marked Distributed or has no quantity)."
+      );
       setDonationForm({
         donor_name: "",
         contact_num: "",
@@ -181,6 +245,7 @@ function CSWDDashboard() {
   };
 
   const handleReliefFieldChange = (field, value) => {
+    setReliefFormSuccess("");
     setReliefForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -209,34 +274,10 @@ function CSWDDashboard() {
         return;
       }
 
-      // Update this household in place so the checklist table below
-      // reflects "Relief Given" immediately, without waiting on a
-      // full dashboard refetch.
-      setDashboardData((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          households: (prev.households || []).map((h) =>
-            h.id === data.relief.household_code
-              ? {
-                  ...h,
-                  relief_status: "Relief Given",
-                  relief_count: (h.relief_count || 0) + 1,
-                  relief_last_goods: data.relief.goods_type,
-                  relief_last_quantity: data.relief.quantity,
-                  relief_last_date: data.relief.distributed_at,
-                }
-              : h
-          ),
-          // Reflect the stock deduction immediately without a full refetch.
-          relief_stock: (prev.relief_stock || []).map((s) =>
-            s.goods_type === data.stock.goods_type ? { ...s, quantity: data.stock.quantity } : s
-          ),
-          relief_released: (prev.relief_released || 0) + data.relief.quantity,
-        };
-      });
+      // Refetch so the new release (Processing), stock and checklist all update.
+      await fetchDashboard();
 
-      setReliefFormSuccess(`Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.household_code}.`);
+      setReliefFormSuccess(`Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.household_code} — now Processing.`);
       setReliefForm({
         household_code: "",
         goods_type: "",
@@ -253,6 +294,7 @@ function CSWDDashboard() {
   };
 
   const handleStockFieldChange = (field, value) => {
+    setStockFormSuccess("");
     setStockForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -291,6 +333,7 @@ function CSWDDashboard() {
         };
       });
 
+      await fetchDashboard();
       setStockFormSuccess(`${data.stock.label} in storage is now ${data.stock.quantity}.`);
       setStockForm({ goods_type: "", quantity: "" });
     } catch (err) {
@@ -471,9 +514,7 @@ function CSWDDashboard() {
                             <td>{item.goods_type}</td>
                             <td>{item.quantity}</td>
                             <td>
-                              <span className={`status-badge status-${String(item.status).toLowerCase().replace(/\s+/g, "-")}`}>
-                                {item.status}
-                              </span>
+                              <ReliefStatusBadge value={item.claim_status} label={item.status} />
                             </td>
                           </tr>
                         ))
@@ -502,7 +543,7 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Relief Distribution" && (
-          <section className="content-grid">
+          <section className="content-grid relief-tab">
             <article className="panel">
               <h2>Record Relief Distribution</h2>
               <form className="donation-form" onSubmit={handleRecordRelief}>
@@ -531,18 +572,21 @@ function CSWDDashboard() {
                     {reliefStock.map((s) => (
                       <div
                         key={s.goods_type}
-                        className={`goods-option ${reliefForm.goods_type === s.goods_type ? 'selected' : ''}`}
-                        onClick={() => handleReliefFieldChange("goods_type", s.goods_type)}
+                        className={`goods-option ${reliefForm.goods_type === s.goods_type ? 'selected' : ''} ${s.quantity <= 0 ? 'out-of-stock' : ''}`}
+                        onClick={() => s.quantity > 0 && handleReliefFieldChange("goods_type", s.goods_type)}
                       >
                         <span className="goods-name">{s.label}</span>
                         <span className="goods-quantity">{s.quantity} left</span>
                       </div>
                     ))}
+                    {reliefStock.length === 0 && (
+                      <p className="field-hint">No goods in storage yet.</p>
+                    )}
                   </div>
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_quantity">Quantity (packs)</label>
+                  <label htmlFor="relief_quantity">Quantity</label>
                   <input
                     id="relief_quantity"
                     type="number"
@@ -609,7 +653,80 @@ function CSWDDashboard() {
               </div>
             </article>
 
-            <article className="panel">
+            <article className="panel relief-wide">
+              <h2>Relief Releases</h2>
+              <p className="panel-note">
+                Set each release to Processing or Ready for Pickup. Once the resident confirms
+                they received it in the mobile app, it becomes Claimed and is locked here.
+              </p>
+              {reliefStatusError && <p className="donation-form-error">{reliefStatusError}</p>}
+              <div className="table-scroll releases-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tracking No.</th>
+                      <th>Household</th>
+                      <th>Goods</th>
+                      <th>Qty</th>
+                      <th>Date</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reliefDistribution.length > 0 ? (
+                      reliefDistribution.map((item) => {
+                        const st = item.claim_status === "pending" ? "processing" : item.claim_status;
+                        const isCancelled = st === "cancelled";
+                        const busy = updatingReliefId === item.id;
+                        return (
+                          <tr key={item.id}>
+                            <td>{item.tracking_number}</td>
+                            <td>{item.household} ({item.household_code})</td>
+                            <td>{item.goods_type}</td>
+                            <td>{item.quantity}</td>
+                            <td>{item.date}</td>
+                            <td>
+                              <ReliefStatusBadge value={item.claim_status} label={item.status} />
+                              {item.claimed_at && (
+                                <div className="relief-received-at">Received {item.claimed_at}</div>
+                              )}
+                            </td>
+                            <td>
+                              {st === "claimed" ? (
+                                <span className="relief-done"> Received by resident</span>
+                              ) : isCancelled ? (
+                                <span className="relief-done">Cancelled</span>
+                              ) : (
+                                <div className="relief-seg">
+                                  {RELIEF_ACTIONS.map((o) => (
+                                    <button
+                                      key={o.value}
+                                      type="button"
+                                      className={`relief-seg-btn ${st === o.value ? "active" : ""}`}
+                                      disabled={busy}
+                                      onClick={() => st !== o.value && handleReliefStatusChange(item, o.value)}
+                                    >
+                                      {o.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan="7">No relief releases recorded yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article className="panel relief-wide">
               <h2>Beneficiary Checklist</h2>
               <div className="panel-toolbar">
                 <label htmlFor="relief-barangay-filter" className="panel-toolbar-label">
@@ -965,6 +1082,7 @@ function CSWDDashboard() {
               <h2>Log a Donation</h2>
               <form className="donation-form" onSubmit={handleAddDonation}>
                 {donationFormError && <p className="donation-form-error">{donationFormError}</p>}
+                {donationFormSuccess && <p className="panel-note">{donationFormSuccess}</p>}
 
                 <div className="donation-form-field">
                   <label htmlFor="donor_name">Donor Name</label>
@@ -990,13 +1108,15 @@ function CSWDDashboard() {
 
                 <div className="donation-form-field">
                   <label htmlFor="goods_type">Goods Type</label>
-                  <input
+                  <select
                     id="goods_type"
-                    type="text"
                     value={donationForm.goods_type}
                     onChange={(e) => handleDonationFieldChange("goods_type", e.target.value)}
-                    placeholder="e.g. Rice Packs"
-                  />
+                  >
+                    <option value="">Select goods type</option>
+                    <option value="rice">Rice</option>
+                    <option value="pack">Pack (all other goods)</option>
+                  </select>
                 </div>
 
                 <div className="donation-form-field">
@@ -1072,11 +1192,8 @@ function CSWDDashboard() {
                     onChange={(e) => handleStockFieldChange("goods_type", e.target.value)}
                   >
                     <option value="">Select goods type</option>
-                    {reliefStock.map((s) => (
-                      <option key={s.goods_type} value={s.goods_type}>
-                        {s.label}
-                      </option>
-                    ))}
+                    <option value="rice">Rice</option>
+                    <option value="pack">Pack (all other goods)</option>
                   </select>
                 </div>
 
@@ -1188,6 +1305,7 @@ function CSWDDashboard() {
                 </div>
               )}
             </article>
+
           </section>
         )}
 

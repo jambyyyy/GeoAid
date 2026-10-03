@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl, Share, Alert } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 // NOTE: paths below assume geoaid-mobile/src/components/... and
 // geoaid-mobile/src/api.js — since this file lives in qr-code/ (a sibling
@@ -71,9 +72,9 @@ function QRCodeScreen({ navigation }) {
   if (!data) {
     return (
       <MobileShell>
-        <View style={styles.loading}>
+        <SafeAreaView style={styles.loading} edges={["top", "bottom"]}>
           <Text>Loading QR codes…</Text>
-        </View>
+        </SafeAreaView>
       </MobileShell>
     );
   }
@@ -97,7 +98,7 @@ function QRCodeScreen({ navigation }) {
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} accessibilityLabel="Back">
             <BackIcon />
@@ -181,7 +182,7 @@ function QRCodeScreen({ navigation }) {
             works even without a signal once loaded.
           </Text>
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }

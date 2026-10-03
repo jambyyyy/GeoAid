@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import { BackIcon, CheckIcon, ClockIcon, XIcon } from "../components/icons";
@@ -21,7 +22,12 @@ function RegistrationStatusScreen({ navigation }) {
   useEffect(() => {
     const fetchStatus = async () => {
       const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
-      
+
+      if (!mobileNumber) {
+        setLoading(false);
+        return;
+      }
+
       try {
         const response = await fetch(
           `${API_BASE}/api/resident/registration-status/?mobile_number=${encodeURIComponent(mobileNumber)}`
@@ -55,16 +61,16 @@ function RegistrationStatusScreen({ navigation }) {
   if (loading) {
     return (
       <MobileShell>
-        <View style={styles.loading}>
+        <SafeAreaView style={styles.loading} edges={["top", "bottom"]}>
           <Text>Loading registration status…</Text>
-        </View>
+        </SafeAreaView>
       </MobileShell>
     );
   }
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity 
             style={styles.backBtn} 
@@ -194,7 +200,7 @@ function RegistrationStatusScreen({ navigation }) {
             </>
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }

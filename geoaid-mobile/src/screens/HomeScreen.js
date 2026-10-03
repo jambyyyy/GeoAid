@@ -1,30 +1,16 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import BottomNav from "../components/BottomNav";
-import { BellIcon, WarnIcon, NavIconArrow, QRIcon, ClockIcon, PinIcon, CheckIcon, PhoneIcon } from "../components/icons";
+import { QRIcon, ClockIcon, PinIcon, PhoneIcon } from "../components/icons";
 import { API_BASE } from "../api";
 
-const FLAG_STYLE = {
-  "4Ps": { backgroundColor: "#eaf3ff", color: "#2563eb" },
-  PWD: { backgroundColor: "#f3e8ff", color: "#7e22ce" },
-  Pregnant: { backgroundColor: "#fce7f3", color: "#be185d" },
-  Elderly: { backgroundColor: "#fef3c7", color: "#b45309" },
-  "Child<5": { backgroundColor: "#dcfce7", color: "#15803d" },
-};
-
-// Fallback shown while the dashboard endpoint doesn't exist yet /
-// isn't reachable, so the screen still resembles the mockup. No
-// members here — those only ever come from what the resident actually
-// entered in Steps 3-4 of registration.
+// Fallback shown while the dashboard endpoint isn't reachable, so the
+// screen still renders something sensible.
 const FALLBACK_DATA = {
   household_name: "Santos Household",
-  unread_alerts: 2,
-  advisory: {
-    title: "Flood Advisory — Tibanga",
-    body: "PAGASA: Heavy rainfall expected. Prepare go-bag. Issued 7:45 AM",
-  },
   nearest_center: {
     name: "Tibanga Gymnasium",
     distance_km: 0.8,
@@ -33,14 +19,16 @@ const FALLBACK_DATA = {
     occupancy: 87,
     capacity: 300,
   },
-  members: [],
 };
+
+// BottomNav tab keys that should open the evacuation map. BottomNav.js
+// wasn't available when this was written, so several likely names are
+// accepted — if your nav uses a different key, add it here.
+const EVACUATION_TABS = ["evacuate", "evacuation", "evac", "map", "route", "evacuation-map", "evacuationMap"];
 
 function HomeScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
-  const [checkInTime, setCheckInTime] = useState(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -62,82 +50,50 @@ function HomeScreen({ navigation }) {
     fetchDashboard();
   }, []);
 
+  // Coming back from another screen should highlight Home again, not
+  // whichever tab was tapped to leave.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("focus", () => setActiveTab("home"));
+    return unsubscribe;
+  }, [navigation]);
+
   if (!data) {
     return (
       <MobileShell>
-        <View style={styles.loading}>
+        <SafeAreaView style={styles.loading} edges={["top", "bottom"]}>
           <Text>Loading dashboard…</Text>
-        </View>
+        </SafeAreaView>
       </MobileShell>
     );
   }
 
-  const { household_name, unread_alerts, advisory, nearest_center, members = [] } = data;
-  const occupancyPct = Math.round((nearest_center.occupancy / nearest_center.capacity) * 100);
+  const { household_name, nearest_center } = data;
+  const occupancyPct = nearest_center.capacity
+    ? Math.min(100, Math.round((nearest_center.occupancy / nearest_center.capacity) * 100))
+    : 0;
 
-  const handleSafetyCheckIn = async () => {
-    const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
-    
-    try {
-      const response = await fetch(`${API_BASE}/api/resident/safety-checkin/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobile_number: mobileNumber }),
-      });
-
-      const result = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        Alert.alert("Check-In Failed", result.message || "Unable to submit safety check-in.");
-        return;
-      }
-
-      setIsCheckedIn(true);
-      setCheckInTime(new Date().toLocaleTimeString());
-      Alert.alert("Safety Confirmed", "Your safety status has been updated. Your household is marked as safe.");
-    } catch (err) {
-      console.error(err);
-      Alert.alert("Error", "Unable to connect to the server.");
+  const handleTabSelect = (tab) => {
+    if (tab === "profile") {
+      navigation.navigate("Profile");
+    } else if (EVACUATION_TABS.includes(tab)) {
+      navigation.navigate("EvacuationMap");
+    } else {
+      setActiveTab(tab);
     }
   };
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>Good morning,</Text>
             <Text style={styles.householdName}>{household_name}</Text>
           </View>
-          <TouchableOpacity style={styles.bellBtn} accessibilityLabel="Notifications">
-            <BellIcon />
-            {unread_alerts > 0 && (
-              <View style={styles.bellBadge}>
-                <Text style={styles.bellBadgeText}>{unread_alerts}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={styles.body}>
-          {advisory && (
-            <View style={styles.advisoryCard}>
-              <WarnIcon color="#b45309" />
-              <View style={styles.advisoryText}>
-                <Text style={styles.advisoryTitle}>{advisory.title}</Text>
-                <Text style={styles.advisoryBody}>{advisory.body}</Text>
-              </View>
-            </View>
-          )}
-
           <View style={styles.quickActions}>
-            <TouchableOpacity
-              style={[styles.quickAction, { backgroundColor: "#e9f7ee" }]}
-              onPress={() => navigation.navigate("EvacuationMap")}
-            >
-              <NavIconArrow />
-              <Text style={styles.quickActionLabel}>Evacuation Route</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: "#eaf0fb" }]}
               onPress={() => navigation.navigate("QRCode")}
@@ -145,7 +101,7 @@ function HomeScreen({ navigation }) {
               <QRIcon />
               <Text style={styles.quickActionLabel}>My QR Code</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.quickAction, { backgroundColor: "#fdf1e3" }]}
               onPress={() => navigation.navigate("RegistrationStatus")}
             >
@@ -154,7 +110,7 @@ function HomeScreen({ navigation }) {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.emergencyContactsBtn}
             onPress={() => navigation.navigate("EmergencyContacts")}
           >
@@ -165,39 +121,12 @@ function HomeScreen({ navigation }) {
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.reliefAction}
             onPress={() => navigation.navigate("ReliefDistribution")}
           >
             <Text style={styles.reliefActionTitle}>Relief Distribution</Text>
             <Text style={styles.reliefActionSubtitle}>Check your relief status and history</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[
-              styles.safetyCheckIn,
-              isCheckedIn && styles.safetyCheckInConfirmed
-            ]}
-            onPress={handleSafetyCheckIn}
-            disabled={isCheckedIn}
-          >
-            <View style={styles.safetyCheckInContent}>
-              <CheckIcon color={isCheckedIn ? "#15803d" : "#fff"} />
-              <View style={styles.safetyCheckInText}>
-                <Text style={[
-                  styles.safetyCheckInTitle,
-                  isCheckedIn && styles.safetyCheckInTitleConfirmed
-                ]}>
-                  {isCheckedIn ? "Safety Confirmed" : "I'm Safe"}
-                </Text>
-                <Text style={[
-                  styles.safetyCheckInSubtitle,
-                  isCheckedIn && styles.safetyCheckInSubtitleConfirmed
-                ]}>
-                  {isCheckedIn ? `Checked in at ${checkInTime}` : "One-tap safety status update"}
-                </Text>
-              </View>
-            </View>
           </TouchableOpacity>
 
           <View style={styles.section}>
@@ -240,55 +169,10 @@ function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
           </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Household Members ({members.length})</Text>
-            {members.length === 0 ? (
-              <View style={styles.membersEmpty}>
-                <Text style={styles.membersEmptyText}>
-                  No household members on file yet. Finish registration Steps 3-4 to add them here.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.membersList}>
-                {members.map((m, i) => (
-                  <View key={`${m.name}-${i}`} style={styles.memberRow}>
-                    <View style={styles.memberAvatar} />
-                    <View style={styles.memberInfo}>
-                      <Text style={styles.memberName}>{m.name}</Text>
-                      <Text style={styles.memberRole}>{m.role}</Text>
-                    </View>
-                    {m.flags?.length > 0 && (
-                      <View style={styles.memberFlags}>
-                        {m.flags.map((f) => (
-                          <View
-                            key={f}
-                            style={[styles.flagBadge, { backgroundColor: FLAG_STYLE[f]?.backgroundColor || "#eee" }]}
-                          >
-                            <Text style={{ color: FLAG_STYLE[f]?.color || "#0f172a", fontSize: 12, fontWeight: "600" }}>
-                              {f}
-                            </Text>
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
         </ScrollView>
 
-        <BottomNav
-          active={activeTab}
-          onSelect={async (tab) => {
-            setActiveTab(tab);
-            if (tab === "profile") {
-              navigation.navigate("Profile");
-            }
-          }}
-        />
-      </View>
+        <BottomNav active={activeTab} onSelect={handleTabSelect} />
+      </SafeAreaView>
     </MobileShell>
   );
 }
@@ -306,68 +190,10 @@ const styles = StyleSheet.create({
   },
   greeting: { fontSize: 13, color: "#64748b" },
   householdName: { fontSize: 20, fontWeight: "700", color: "#0f172a" },
-  bellBtn: { padding: 8 },
-  bellBadge: {
-    position: "absolute",
-    top: 2,
-    right: 2,
-    backgroundColor: "#dc2626",
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  bellBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   body: { paddingHorizontal: 20, paddingBottom: 24, gap: 18 },
-  advisoryCard: {
-    flexDirection: "row",
-    gap: 10,
-    backgroundColor: "#fff7ed",
-    borderWidth: 1,
-    borderColor: "#fed7aa",
-    borderRadius: 12,
-    padding: 12,
-  },
-  advisoryText: { flex: 1 },
-  advisoryTitle: { fontWeight: "700", color: "#9a3412", marginBottom: 2 },
-  advisoryBody: { fontSize: 12, color: "#7c2d12" },
   quickActions: { flexDirection: "row", gap: 10 },
   quickAction: { flex: 1, borderRadius: 12, padding: 12, alignItems: "center", gap: 6 },
   quickActionLabel: { fontSize: 12, fontWeight: "600", color: "#374151", textAlign: "center" },
-  safetyCheckIn: {
-    backgroundColor: "#dc2626",
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#b91c1c",
-  },
-  safetyCheckInConfirmed: {
-    backgroundColor: "#dcfce7",
-    borderColor: "#bbf7d0",
-  },
-  safetyCheckInContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  safetyCheckInText: { flex: 1 },
-  safetyCheckInTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  safetyCheckInTitleConfirmed: {
-    color: "#166534",
-  },
-  safetyCheckInSubtitle: {
-    fontSize: 12,
-    color: "#fee2e2",
-    marginTop: 2,
-  },
-  safetyCheckInSubtitleConfirmed: {
-    color: "#15803d",
-  },
   reliefAction: {
     backgroundColor: "#dbeafe",
     borderRadius: 12,
@@ -429,25 +255,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   directionsBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
-  membersEmpty: { backgroundColor: "#fff", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#eef0f3" },
-  membersEmptyText: { fontSize: 13, color: "#64748b", textAlign: "center" },
-  membersList: { gap: 8 },
-  memberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "#eef0f3",
-  },
-  memberAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#e5e7eb" },
-  memberInfo: { flex: 1 },
-  memberName: { fontWeight: "600", fontSize: 14, color: "#111827" },
-  memberRole: { fontSize: 12, color: "#64748b" },
-  memberFlags: { flexDirection: "row", flexWrap: "wrap", gap: 4, maxWidth: 100 },
-  flagBadge: { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
 });
 
 export default HomeScreen;

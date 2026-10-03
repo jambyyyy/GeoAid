@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -420,7 +421,7 @@ function EvacuationMapScreen({ navigation, route }) {
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} accessibilityLabel="Back">
             <Text style={styles.backBtnText}>‹</Text>
@@ -542,7 +543,7 @@ function EvacuationMapScreen({ navigation, route }) {
             </View>
           ) : null}
         </View>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }

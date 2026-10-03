@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import { BackIcon, EditIcon, CheckIcon, XIcon } from "../components/icons";
@@ -17,33 +18,47 @@ function ProfileScreen({ navigation }) {
   });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    const fetchProfile = async () => {
-      const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
-      
-      try {
-        const response = await fetch(
-          `${API_BASE}/api/resident/profile/?mobile_number=${encodeURIComponent(mobileNumber)}`
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          setHouseholdData(data);
-          setEditForm({
-            full_name: data.full_name || "",
-            address_line: data.address_line || "",
-            landmark: data.landmark || "",
-            mobile_number: data.mobile_number || mobileNumber,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to fetch profile:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const [loadError, setLoadError] = useState("");
 
+  const fetchProfile = async () => {
+    setLoading(true);
+    setLoadError("");
+    const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
+
+    if (!mobileNumber) {
+      setLoadError("You're not signed in. Please log in again.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/resident/profile/?mobile_number=${encodeURIComponent(mobileNumber)}`
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setHouseholdData(data);
+        setEditForm({
+          full_name: data.full_name || "",
+          address_line: data.address_line || "",
+          landmark: data.landmark || "",
+          mobile_number: data.mobile_number || mobileNumber,
+        });
+      } else {
+        setLoadError(`Couldn't load your profile (error ${response.status}).`);
+      }
+    } catch (err) {
+      console.error("Failed to fetch profile:", err);
+      setLoadError("Unable to connect to the server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSave = async () => {
@@ -93,16 +108,16 @@ function ProfileScreen({ navigation }) {
   if (loading) {
     return (
       <MobileShell>
-        <View style={styles.loading}>
+        <SafeAreaView style={styles.loading} edges={["top", "bottom"]}>
           <Text>Loading profile…</Text>
-        </View>
+        </SafeAreaView>
       </MobileShell>
     );
   }
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity 
             style={styles.backBtn} 
@@ -123,7 +138,15 @@ function ProfileScreen({ navigation }) {
           )}
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+          {!householdData && loadError ? (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorText}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={fetchProfile}>
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           {householdData && (
             <>
               <View style={styles.section}>
@@ -172,9 +195,13 @@ function ProfileScreen({ navigation }) {
                   <View style={styles.infoRow}>
                     <Text style={styles.infoLabel}>Full Name</Text>
                     {editing ? (
-                      <View style={styles.editField}>
-                        <Text style={styles.editValue}>{editForm.full_name}</Text>
-                      </View>
+                      <TextInput
+                        style={styles.editInput}
+                        value={editForm.full_name}
+                        onChangeText={(v) => setEditForm((f) => ({ ...f, full_name: v }))}
+                        editable={!saving}
+                        placeholder="Full name"
+                      />
                     ) : (
                       <Text style={styles.infoValue}>{householdData.full_name || "—"}</Text>
                     )}
@@ -182,21 +209,20 @@ function ProfileScreen({ navigation }) {
                   
                   <View style={styles.infoRow}>
                     <Text style={styles.infoLabel}>Mobile Number</Text>
-                    {editing ? (
-                      <View style={styles.editField}>
-                        <Text style={styles.editValue}>{editForm.mobile_number}</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.infoValue}>{householdData.mobile_number || "—"}</Text>
-                    )}
+                    {/* Mobile number is the login ID, so it is never editable here. */}
+                    <Text style={styles.infoValue}>{householdData.mobile_number || "—"}</Text>
                   </View>
                   
                   <View style={styles.infoRow}>
                     <Text style={styles.infoLabel}>Address</Text>
                     {editing ? (
-                      <View style={styles.editField}>
-                        <Text style={styles.editValue}>{editForm.address_line || "—"}</Text>
-                      </View>
+                      <TextInput
+                        style={styles.editInput}
+                        value={editForm.address_line}
+                        onChangeText={(v) => setEditForm((f) => ({ ...f, address_line: v }))}
+                        editable={!saving}
+                        placeholder="Street / house no."
+                      />
                     ) : (
                       <Text style={styles.infoValue}>{householdData.address_line || "—"}</Text>
                     )}
@@ -205,9 +231,13 @@ function ProfileScreen({ navigation }) {
                   <View style={styles.infoRow}>
                     <Text style={styles.infoLabel}>Landmark</Text>
                     {editing ? (
-                      <View style={styles.editField}>
-                        <Text style={styles.editValue}>{editForm.landmark || "—"}</Text>
-                      </View>
+                      <TextInput
+                        style={styles.editInput}
+                        value={editForm.landmark}
+                        onChangeText={(v) => setEditForm((f) => ({ ...f, landmark: v }))}
+                        editable={!saving}
+                        placeholder="Nearby landmark"
+                      />
                     ) : (
                       <Text style={styles.infoValue}>{householdData.landmark || "—"}</Text>
                     )}
@@ -277,13 +307,6 @@ function ProfileScreen({ navigation }) {
               )}
 
               <TouchableOpacity 
-                style={styles.purokContactBtn}
-                onPress={() => navigation.navigate("PurokContact")}
-              >
-                <Text style={styles.purokContactBtnText}>Contact Purok President</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
                 style={styles.logoutBtn}
                 onPress={async () => {
                   await AsyncStorage.removeItem("geoaid_resident_mobile");
@@ -295,7 +318,7 @@ function ProfileScreen({ navigation }) {
             </>
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }
@@ -341,6 +364,32 @@ const styles = StyleSheet.create({
     minWidth: 150,
   },
   editValue: { fontSize: 14, fontWeight: "600", color: "#111827" },
+  editInput: {
+    flex: 1,
+    marginLeft: 16,
+    backgroundColor: "#f8fafc",
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+    textAlign: "right",
+  },
+  errorCard: {
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+    gap: 10,
+  },
+  errorText: { fontSize: 13, color: "#991b1b", textAlign: "center" },
+  retryBtn: { backgroundColor: "#dc2626", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20 },
+  retryBtnText: { color: "#fff", fontWeight: "600", fontSize: 14 },
   statusBadge: {
     borderRadius: 8,
     paddingHorizontal: 10,
@@ -416,14 +465,6 @@ const styles = StyleSheet.create({
     borderColor: "#fed7aa",
   },
   infoNoteText: { fontSize: 12, color: "#9a3412", textAlign: "center" },
-  purokContactBtn: {
-    backgroundColor: "#2563eb",
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  purokContactBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   logoutBtn: {
     backgroundColor: "#dc2626",
     borderRadius: 8,
