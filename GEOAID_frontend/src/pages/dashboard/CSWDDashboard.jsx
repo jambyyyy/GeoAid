@@ -4,6 +4,31 @@ import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
 import { API_URL } from "../../config";
 
+// Remembers the selected page/tab in sessionStorage so a browser refresh
+// keeps you where you were instead of jumping back to "Dashboard". The
+// saved value is cleared on logout and ignored if it is no longer valid.
+function usePersistedChoice(key, fallback, isValid) {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved && isValid(saved)) return saved;
+    } catch {
+      /* storage unavailable — use the default */
+    }
+    return fallback;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }, [key, value]);
+
+  return [value, setValue];
+}
+
 const navItems = [
   "Dashboard",
   "Relief Distribution",
@@ -72,7 +97,7 @@ function CSWDDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "CSWD Personnel";
 
-  const [activeItem, setActiveItem] = useState("Dashboard");
+  const [activeItem, setActiveItem] = usePersistedChoice("geoaid_cswd_page", "Dashboard", (v) => v in sectionInfo);
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -186,6 +211,7 @@ function CSWDDashboard() {
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
+    sessionStorage.removeItem("geoaid_cswd_page");
     navigate("/");
   };
 

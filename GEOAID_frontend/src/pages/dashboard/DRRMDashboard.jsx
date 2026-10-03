@@ -12,6 +12,31 @@ import { API_URL } from "../../config";
 // below rather than as separate top-level nav items.
 const navItems = ["Dashboard", "Situations & Routes", "Evacuation Map", "Reports", "Settings"];
 
+// Remembers the selected page/tab in sessionStorage so a browser refresh
+// keeps you where you were instead of jumping back to "Dashboard". The
+// saved value is cleared on logout and ignored if it is no longer valid.
+function usePersistedChoice(key, fallback, isValid) {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved && isValid(saved)) return saved;
+    } catch {
+      /* storage unavailable — use the default */
+    }
+    return fallback;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }, [key, value]);
+
+  return [value, setValue];
+}
+
 const sectionInfo = {
   "Dashboard": { title: "DRRM Officer Dashboard", subtitle: "City-wide disaster management & evacuation overview" },
   "Situations & Routes": { title: "Disaster Situations & Routes", subtitle: "Disaster situations and evacuation routes" },
@@ -91,8 +116,8 @@ function DRRMDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "DRRM Officer";
 
-  const [activeItem, setActiveItem] = useState("Dashboard");
-  const [locationSubTab, setLocationSubTab] = useState("Situations"); // Situations | Routes
+  const [activeItem, setActiveItem] = usePersistedChoice("geoaid_drrm_page", "Dashboard", (v) => v in sectionInfo);
+  const [locationSubTab, setLocationSubTab] = usePersistedChoice("geoaid_drrm_subtab", "Situations", (v) => ["Situations", "Routes"].includes(v)); // Situations | Routes
 
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -437,6 +462,8 @@ function DRRMDashboard() {
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
+    sessionStorage.removeItem("geoaid_drrm_page");
+    sessionStorage.removeItem("geoaid_drrm_subtab");
     navigate("/");
   };
 

@@ -6,6 +6,31 @@ import { API_URL } from "../../config";
 
 const navItems = ["Dashboard", "Household Registration", "Reports", "Settings"];
 
+// Remembers the selected page/tab in sessionStorage so a browser refresh
+// keeps you where you were instead of jumping back to "Dashboard". The
+// saved value is cleared on logout and ignored if it is no longer valid.
+function usePersistedChoice(key, fallback, isValid) {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved && isValid(saved)) return saved;
+    } catch {
+      /* storage unavailable — use the default */
+    }
+    return fallback;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }, [key, value]);
+
+  return [value, setValue];
+}
+
 const sectionInfo = (barangay) => ({
   "Dashboard": { title: "Purok President Dashboard", subtitle: `Overview of household registrations awaiting your review${barangay ? ` — Brgy. ${barangay}` : ""}` },
   "Household Registration": { title: "Household Registration Review", subtitle: `Verify household submissions${barangay ? ` from Brgy. ${barangay}` : ""}, then approve to forward to Barangay Staff` },
@@ -223,13 +248,13 @@ function PurokDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "Purok President";
 
-  const [activeItem, setActiveItem] = useState("Dashboard");
+  const [activeItem, setActiveItem] = usePersistedChoice("geoaid_purok_page", "Dashboard", (v) => v in sectionInfo(""));
   const [dashboardData, setDashboardData] = useState(null);
   const [households, setHouseholds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [activeTab, setActiveTab] = useState("pending");
+  const [activeTab, setActiveTab] = usePersistedChoice("geoaid_purok_tab", "pending", (v) => ["pending", "approved", "rejected"].includes(v));
   const [expandedId, setExpandedId] = useState(null);
   const [toast, setToast] = useState(null);
   const [pendingAction, setPendingAction] = useState(null); // { id, type, familyName }
@@ -265,6 +290,8 @@ function PurokDashboard() {
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
+    sessionStorage.removeItem("geoaid_purok_page");
+    sessionStorage.removeItem("geoaid_purok_tab");
     navigate("/");
   };
 

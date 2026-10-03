@@ -13,6 +13,31 @@ const navItems = [
   "Reports",
 ];
 
+// Remembers the selected page/tab in sessionStorage so a browser refresh
+// keeps you where you were instead of jumping back to "Dashboard". The
+// saved value is cleared on logout and ignored if it is no longer valid.
+function usePersistedChoice(key, fallback, isValid) {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved && isValid(saved)) return saved;
+    } catch {
+      /* storage unavailable — use the default */
+    }
+    return fallback;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }, [key, value]);
+
+  return [value, setValue];
+}
+
 const sectionInfo = (barangay) => ({
   "Dashboard": { title: "Barangay Staff Dashboard", subtitle: `Evacuation & Relief Operations${barangay ? ` — Brgy. ${barangay}` : ""}` },
   "Household Registration": { title: "Household Registration", subtitle: `Give final confirmation to households already approved by your Purok Presidents${barangay ? ` in Brgy. ${barangay}` : ""}` },
@@ -217,7 +242,7 @@ function ConfirmModal({ action, onConfirm, onCancel, isSubmitting }) {
 function Dashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "Barangay Staff";
-  const [activeItem, setActiveItem] = useState("Dashboard");
+  const [activeItem, setActiveItem] = usePersistedChoice("geoaid_barangay_page", "Dashboard", (v) => v in sectionInfo(""));
 
   const [dashboardData, setDashboardData] = useState(null);
   const [households, setHouseholds] = useState([]);
@@ -252,7 +277,7 @@ function Dashboard() {
   const [evacuationData, setEvacuationData] = useState(null);
   const [evacuationError, setEvacuationError] = useState("");
 
-  const [activeTab, setActiveTab] = useState("approved");
+  const [activeTab, setActiveTab] = usePersistedChoice("geoaid_barangay_tab", "approved", (v) => ["approved", "confirmed", "rejected"].includes(v));
   const [expandedId, setExpandedId] = useState(null);
   const [attendancePage, setAttendancePage] = useState(1);
   const ATTENDANCE_PAGE_SIZE = 10;
@@ -322,6 +347,8 @@ function Dashboard() {
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
+    sessionStorage.removeItem("geoaid_barangay_page");
+    sessionStorage.removeItem("geoaid_barangay_tab");
     navigate("/");
   };
 
