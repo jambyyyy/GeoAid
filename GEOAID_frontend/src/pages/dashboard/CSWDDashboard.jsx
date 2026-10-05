@@ -2,6 +2,7 @@ import { useEffect, useState, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
+import { Paginated } from "../../components/Pagination";
 import { API_URL } from "../../config";
 
 // Remembers the selected page/tab in sessionStorage so a browser refresh
@@ -42,7 +43,6 @@ const navItems = [
 
 const FLAG_CLASS = {
   "PWD": "flag-pwd",
-  "4Ps": "flag-4ps",
   "Pregnant": "flag-pregnant",
   "Elderly": "flag-elderly",
   "Child<5": "flag-child5",
@@ -50,7 +50,7 @@ const FLAG_CLASS = {
 
 const sectionInfo = {
   "Dashboard": { title: "CSWD Dashboard", subtitle: "City Social Welfare & Development — Relief & Beneficiary Operations" },
-  "Relief Distribution": { title: "Relief Distribution", subtitle: "Track relief goods disbursed across barangays" },
+  "Relief Distribution": { title: "Relief Distribution", subtitle: "Release relief goods to each barangay's evacuation center and see how many households are inside" },
   "Households": { title: "Households", subtitle: "Registered households under CSWD monitoring" },
   "Vulnerability Profiles": { title: "Vulnerability Profiles", subtitle: "Senior citizens, PWD, pregnant women, and children under 5 — ranked by priority level" },
   "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy across active evacuation sites" },
@@ -60,20 +60,9 @@ const sectionInfo = {
 };
 
 
-const REPORT_TYPE_LABELS = {
-  relief_vulnerability: "Relief & Vulnerability",
-  situation: "Situation",
-  disaster_monitoring: "Disaster Monitoring",
-};
-
-// Relief release lifecycle: CSWD moves a release through these; the
-// resident confirms receipt in the mobile app (-> "claimed").
-// The only statuses CSWD can set. "Claimed" comes from the resident.
-const RELIEF_ACTIONS = [
-  { value: "processing", label: "Processing" },
-  { value: "ready", label: "Ready for Pickup" },
-];
-
+// Relief release lifecycle: CSWD records a release (Processing). It becomes
+// Received only when the barangay confirms the goods arrived, from the
+// Barangay dashboard — CSWD just sees the status here.
 const RELIEF_STATUS_OPTIONS = [
   { value: "processing", label: "Processing" },
   { value: "ready", label: "Ready for Pickup" },
@@ -127,7 +116,8 @@ function CSWDDashboard() {
   const [donationFormSuccess, setDonationFormSuccess] = useState("");
 
   const [reliefForm, setReliefForm] = useState({
-    household_code: "",
+    barangay: "",
+    evacuation_center_id: "",
     goods_type: "",
     quantity: "",
     disaster_type_id: "",
@@ -137,8 +127,8 @@ function CSWDDashboard() {
   const [reliefFormError, setReliefFormError] = useState("");
   const [reliefFormSuccess, setReliefFormSuccess] = useState("");
 
-  const [updatingReliefId, setUpdatingReliefId] = useState(null);
-  const [reliefStatusError, setReliefStatusError] = useState("");
+  const [expandedBarangay, setExpandedBarangay] = useState(null);
+  const [expandedCenter, setExpandedCenter] = useState(null);
 
   const [stockForm, setStockForm] = useState({ goods_type: "", quantity: "" });
   const [isSubmittingStock, setIsSubmittingStock] = useState(false);
@@ -146,14 +136,12 @@ function CSWDDashboard() {
   const [stockFormSuccess, setStockFormSuccess] = useState("");
 
   const [reportForm, setReportForm] = useState({
-    report_type: "",
     title: "",
     content: "",
     disaster_type_id: "",
   });
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportFormError, setReportFormError] = useState("");
-  const [expandedReportId, setExpandedReportId] = useState(null);
 
   const fetchDashboard = async () => {
     try {
@@ -176,37 +164,6 @@ function CSWDDashboard() {
   useEffect(() => {
     fetchDashboard();
   }, []);
-
-  // CSWD switches an open relief release between Processing and Ready
-  // for Pickup. "Claimed" is set only by the resident in the mobile app,
-  // after which the release is locked here.
-  const handleReliefStatusChange = async (item, newStatus) => {
-    if (newStatus === item.claim_status) return;
-
-    setReliefStatusError("");
-    setUpdatingReliefId(item.id);
-    try {
-      const response = await fetch(`${API_URL}/api/cswd/relief/status/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: item.id, status: newStatus, username }),
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.success) {
-        setReliefStatusError(data.message || "Could not update this relief release.");
-        return;
-      }
-
-      await fetchDashboard();
-    } catch (err) {
-      console.error(err);
-      setReliefStatusError("Unable to connect to the server.");
-    } finally {
-      setUpdatingReliefId(null);
-    }
-  };
 
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
@@ -272,7 +229,12 @@ function CSWDDashboard() {
 
   const handleReliefFieldChange = (field, value) => {
     setReliefFormSuccess("");
-    setReliefForm((prev) => ({ ...prev, [field]: value }));
+    setReliefForm((prev) => ({
+      ...prev,
+      [field]: value,
+      // A different barangay means a different set of evacuation centers.
+      ...(field === "barangay" ? { evacuation_center_id: "" } : {}),
+    }));
   };
 
   const handleRecordRelief = async (e) => {
@@ -280,8 +242,8 @@ function CSWDDashboard() {
     setReliefFormError("");
     setReliefFormSuccess("");
 
-    if (!reliefForm.household_code || !reliefForm.goods_type.trim() || !reliefForm.quantity) {
-      setReliefFormError("Household, goods type, and quantity are required.");
+    if (!reliefForm.barangay || !reliefForm.goods_type.trim() || !reliefForm.quantity) {
+      setReliefFormError("Barangay, goods type, and quantity are required.");
       return;
     }
 
@@ -300,12 +262,17 @@ function CSWDDashboard() {
         return;
       }
 
-      // Refetch so the new release (Processing), stock and checklist all update.
+      // Refetch so the new release (Processing), stock and barangay overview all update.
       await fetchDashboard();
 
-      setReliefFormSuccess(`Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.household_code} — now Processing.`);
+      setReliefFormSuccess(
+        `Logged ${data.relief.quantity} ${data.relief.goods_type} for Brgy. ${data.relief.barangay}` +
+        `${data.relief.evacuation_center ? ` (${data.relief.evacuation_center})` : ""}` +
+        ` — covers ${data.relief.households_served} household${data.relief.households_served === 1 ? "" : "s"}. Now Processing.`
+      );
       setReliefForm({
-        household_code: "",
+        barangay: "",
+        evacuation_center_id: "",
         goods_type: "",
         quantity: "",
         disaster_type_id: "",
@@ -378,32 +345,39 @@ function CSWDDashboard() {
     e.preventDefault();
     setReportFormError("");
 
-    if (!reportForm.report_type || !reportForm.title.trim() || !reportForm.content.trim()) {
-      setReportFormError("Report type, title, and content are required.");
+    if (!reportForm.title.trim() || !reportForm.content.trim()) {
+      setReportFormError("Title and content are required.");
       return;
     }
 
     setIsSubmittingReport(true);
     try {
-      const response = await fetch(`${API_URL}/api/reports/generate/`, {
+      // The server builds the PDF (your title + content on top, then the
+      // latest data for your role) and sends it back as a download.
+      const response = await fetch(`${API_URL}/api/reports/pdf/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...reportForm, username }),
       });
 
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.success) {
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         setReportFormError(data.message || "Could not generate this report. Please try again.");
         return;
       }
 
-      // Prepend the new report so it shows up immediately, without
-      // waiting on a full dashboard refetch.
-      setDashboardData((prev) =>
-        prev ? { ...prev, reports: [data.report, ...(prev.reports || [])] } : prev
-      );
-      setReportForm({ report_type: "", title: "", content: "", disaster_type_id: "" });
+      const cd = response.headers.get("Content-Disposition") || "";
+      const match = /filename="?([^"]+)"?/.exec(cd);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = match ? match[1] : "GeoAid_Report.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setReportForm({ title: "", content: "", disaster_type_id: "" });
     } catch (err) {
       console.error(err);
       setReportFormError("Unable to connect to the server.");
@@ -438,6 +412,15 @@ function CSWDDashboard() {
   const reliefStock = dashboardData?.relief_stock || [];
   const evacuationCenters = dashboardData?.evacuation_centers || [];
   const allHouseholds = dashboardData?.households || [];
+  const barangayRelief = dashboardData?.barangay_relief || [];
+
+  // Evacuation centers (with their household counts) of the barangay
+  // picked in the Record Relief form.
+  const reliefFormCenters = evacuationCenters.filter((c) => c.barangay === reliefForm.barangay);
+  const reliefFormBarangay = barangayRelief.find((b) => b.barangay === reliefForm.barangay);
+  const reliefFormCenter = reliefForm.evacuation_center_id
+    ? reliefFormCenters.find((c) => String(c.id) === String(reliefForm.evacuation_center_id))
+    : reliefFormCenters.length === 1 ? reliefFormCenters[0] : null;
 
   // Filtered by the selected barangay, then sorted so the highest-priority
   // (most vulnerable) households surface first — this is what lets CSWD
@@ -449,6 +432,12 @@ function CSWDDashboard() {
   )
     .slice()
     .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
+
+  const filteredBarangayRelief = (
+    selectedBarangay === "All"
+      ? barangayRelief
+      : barangayRelief.filter((b) => b.barangay === selectedBarangay)
+  );
 
   const filteredEvacuationCenters = (
     selectedBarangay === "All"
@@ -520,12 +509,13 @@ function CSWDDashboard() {
             <section className="content-grid">
               <article className="panel">
                 <h2>Recent Relief Releases</h2>
+                  <Paginated items={reliefDistribution}>{(pageRows) => (
                 <div className="table-scroll">
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Household</th>
                         <th>Barangay</th>
+                        <th>Evacuation Center</th>
                         <th>Goods</th>
                         <th>Qty</th>
                         <th>Status</th>
@@ -533,10 +523,10 @@ function CSWDDashboard() {
                     </thead>
                     <tbody>
                       {reliefDistribution.length > 0 ? (
-                        reliefDistribution.map((item) => (
+                        pageRows.map((item) => (
                           <tr key={item.id}>
-                            <td>{item.household}</td>
                             <td>{item.barangay}</td>
+                            <td>{item.evacuation_center || "—"}</td>
                             <td>{item.goods_type}</td>
                             <td>{item.quantity}</td>
                             <td>
@@ -552,6 +542,7 @@ function CSWDDashboard() {
                     </tbody>
                   </table>
                 </div>
+                  )}</Paginated>
               </article>
 
               <article className="panel">
@@ -577,20 +568,50 @@ function CSWDDashboard() {
                 {reliefFormSuccess && <p className="panel-note">{reliefFormSuccess}</p>}
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_household_code">Household</label>
+                  <label htmlFor="relief_barangay">Barangay</label>
                   <select
-                    id="relief_household_code"
-                    value={reliefForm.household_code}
-                    onChange={(e) => handleReliefFieldChange("household_code", e.target.value)}
+                    id="relief_barangay"
+                    value={reliefForm.barangay}
+                    onChange={(e) => handleReliefFieldChange("barangay", e.target.value)}
                   >
-                    <option value="">Select a confirmed household</option>
-                    {allHouseholds.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.family_name} Family ({h.id}) — {h.barangay}
-                      </option>
+                    <option value="">Select a barangay</option>
+                    {BARANGAYS.map((b) => (
+                      <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
                 </div>
+
+                {reliefForm.barangay && (
+                  <div className="donation-form-field">
+                    <label htmlFor="relief_evacuation_center_id">Evacuation Center</label>
+                    {reliefFormCenters.length > 0 ? (
+                      <select
+                        id="relief_evacuation_center_id"
+                        value={reliefForm.evacuation_center_id || (reliefFormCenters.length === 1 ? String(reliefFormCenters[0].id) : "")}
+                        onChange={(e) => handleReliefFieldChange("evacuation_center_id", e.target.value)}
+                      >
+                        {reliefFormCenters.length > 1 && <option value="">Select an evacuation center</option>}
+                        {reliefFormCenters.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} — {c.households_in_center} household{c.households_in_center === 1 ? "" : "s"} inside
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="panel-note">
+                        No evacuation center is set up for {reliefForm.barangay} yet — the release will
+                        cover its {reliefFormBarangay?.registered_households ?? 0} confirmed household(s).
+                      </p>
+                    )}
+                    {reliefFormCenter && (
+                      <p className="panel-note">
+                        {reliefFormCenter.households_in_center} household{reliefFormCenter.households_in_center === 1 ? "" : "s"} ·{" "}
+                        {reliefFormCenter.members_in_center} {reliefFormCenter.members_in_center === 1 ? "person" : "people"} currently
+                        checked in at {reliefFormCenter.name}.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="donation-form-field">
                   <label htmlFor="relief_goods_type">Goods Type</label>
@@ -682,33 +703,36 @@ function CSWDDashboard() {
             <article className="panel relief-wide">
               <h2>Relief Releases</h2>
               <p className="panel-note">
-                Set each release to Processing or Ready for Pickup. Once the resident confirms
-                they received it in the mobile app, it becomes Claimed and is locked here.
+                A release stays Processing until the barangay staff confirm on their dashboard that
+                they received it. The barangay then gives the goods to the households checked in at
+                its evacuation center.
               </p>
-              {reliefStatusError && <p className="donation-form-error">{reliefStatusError}</p>}
+                <Paginated items={reliefDistribution}>{(pageRows) => (
               <div className="table-scroll releases-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
                       <th>Tracking No.</th>
-                      <th>Household</th>
+                      <th>Barangay / Evacuation Center</th>
+                      <th>Households</th>
                       <th>Goods</th>
                       <th>Qty</th>
                       <th>Date</th>
                       <th>Status</th>
-                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {reliefDistribution.length > 0 ? (
-                      reliefDistribution.map((item) => {
-                        const st = item.claim_status === "pending" ? "processing" : item.claim_status;
-                        const isCancelled = st === "cancelled";
-                        const busy = updatingReliefId === item.id;
+                      pageRows.map((item) => {
                         return (
                           <tr key={item.id}>
                             <td>{item.tracking_number}</td>
-                            <td>{item.household} ({item.household_code})</td>
+                            <td>
+                              {item.household_code
+                                ? <>{item.household} ({item.household_code}){item.evacuation_center ? <div className="relief-received-at">Brgy. {item.barangay} · {item.evacuation_center}</div> : null}</>
+                                : <>Brgy. {item.barangay}{item.evacuation_center ? <div className="relief-received-at">{item.evacuation_center}</div> : null}</>}
+                            </td>
+                            <td>{item.household_code ? 1 : item.households_served}</td>
                             <td>{item.goods_type}</td>
                             <td>{item.quantity}</td>
                             <td>{item.date}</td>
@@ -716,27 +740,6 @@ function CSWDDashboard() {
                               <ReliefStatusBadge value={item.claim_status} label={item.status} />
                               {item.claimed_at && (
                                 <div className="relief-received-at">Received {item.claimed_at}</div>
-                              )}
-                            </td>
-                            <td>
-                              {st === "claimed" ? (
-                                <span className="relief-done"> Received by resident</span>
-                              ) : isCancelled ? (
-                                <span className="relief-done">Cancelled</span>
-                              ) : (
-                                <div className="relief-seg">
-                                  {RELIEF_ACTIONS.map((o) => (
-                                    <button
-                                      key={o.value}
-                                      type="button"
-                                      className={`relief-seg-btn ${st === o.value ? "active" : ""}`}
-                                      disabled={busy}
-                                      onClick={() => st !== o.value && handleReliefStatusChange(item, o.value)}
-                                    >
-                                      {o.label}
-                                    </button>
-                                  ))}
-                                </div>
                               )}
                             </td>
                           </tr>
@@ -750,10 +753,15 @@ function CSWDDashboard() {
                   </tbody>
                 </table>
               </div>
+                )}</Paginated>
             </article>
 
             <article className="panel relief-wide">
-              <h2>Beneficiary Checklist</h2>
+              <h2>Barangay Relief Overview</h2>
+              <p className="panel-note">
+                Relief goes to each barangay's evacuation center. Click a barangay to see the
+                households currently inside its center.
+              </p>
               <div className="panel-toolbar">
                 <label htmlFor="relief-barangay-filter" className="panel-toolbar-label">
                   Barangay:
@@ -770,56 +778,112 @@ function CSWDDashboard() {
                   ))}
                 </select>
                 <span className="panel-toolbar-count">
-                  {filteredHouseholds.length} household{filteredHouseholds.length === 1 ? "" : "s"}
+                  {filteredBarangayRelief.length} barangay{filteredBarangayRelief.length === 1 ? "" : "s"}
                 </span>
               </div>
 
+                <Paginated items={filteredBarangayRelief} resetKey={selectedBarangay}>{(pageRows) => (
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Household</th>
                       <th>Barangay</th>
-                      <th>Priority</th>
+                      <th>Evacuation Center</th>
+                      <th>Households in Center</th>
+                      <th>Registered Households</th>
                       <th>Status</th>
                       <th>Last Relief Given</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredHouseholds.length > 0 ? (
-                      filteredHouseholds.map((h) => (
-                        <tr key={h.id}>
-                          <td>{h.family_name} Family ({h.id})</td>
-                          <td>{h.barangay}</td>
-                          <td>
-                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
-                              {h.priority_level || "Low"}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`status-badge status-${String(h.relief_status).toLowerCase().replace(/\s+/g, "-")}`}>
-                              {h.relief_status}
-                            </span>
-                          </td>
-                          <td>
-                            {h.relief_last_goods
-                              ? `${h.relief_last_quantity}x ${h.relief_last_goods} · ${h.relief_last_date}`
-                              : "—"}
-                          </td>
-                        </tr>
+                    {filteredBarangayRelief.length > 0 ? (
+                      pageRows.map((b) => (
+                        <Fragment key={b.barangay}>
+                          <tr
+                            className="household-row"
+                            onClick={() => setExpandedBarangay(expandedBarangay === b.barangay ? null : b.barangay)}
+                          >
+                            <td>
+                              <span className="expand-caret">{expandedBarangay === b.barangay ? "▾" : "▸"}</span>{" "}
+                              {b.barangay}
+                            </td>
+                            <td>
+                              {b.evacuation_centers.length > 0
+                                ? b.evacuation_centers.map((c) => c.name).join(", ")
+                                : "—"}
+                            </td>
+                            <td>
+                              {b.households_in_evacuation}
+                              {b.members_in_evacuation > 0 && (
+                                <span className="relief-received-at"> ({b.members_in_evacuation} people)</span>
+                              )}
+                            </td>
+                            <td>{b.registered_households}</td>
+                            <td>
+                              <span className={`status-badge status-${String(b.relief_status).toLowerCase().replace(/\s+/g, "-")}`}>
+                                {b.relief_status}
+                              </span>
+                            </td>
+                            <td>
+                              {b.last_goods
+                                ? `${b.last_quantity}x ${b.last_goods} · ${b.last_date}`
+                                : "—"}
+                            </td>
+                          </tr>
+
+                          {expandedBarangay === b.barangay && (
+                            <tr className="household-detail-row">
+                              <td colSpan="6">
+                                {b.evacuation_centers.length > 0 ? (
+                                  b.evacuation_centers.map((c) => (
+                                    <div key={c.id} className="household-detail-col" style={{ marginBottom: 12 }}>
+                                      <p className="household-detail-label">
+                                        {c.name} — {c.households_in_center} household{c.households_in_center === 1 ? "" : "s"} ·{" "}
+                                        {c.members_in_center} {c.members_in_center === 1 ? "person" : "people"} · {c.occupancy} occupancy
+                                      </p>
+                                      {c.households.length > 0 ? (
+                                        <Paginated items={c.households}>{(pageRows) => (
+                                        <table className="data-table">
+                                          <thead>
+                                            <tr>
+                                              <th>Household</th>
+                                              <th>Purok</th>
+                                              <th>Members Present</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {pageRows.map((h) => (
+                                              <tr key={h.household_code}>
+                                                <td>{h.family_name} Family ({h.household_code})</td>
+                                                <td>{h.purok || "—"}</td>
+                                                <td>{h.members_present}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                        )}</Paginated>
+                                      ) : (
+                                        <p className="household-detail-text">No households are checked in at this center right now.</p>
+                                      )}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="household-detail-text">No evacuation center is set up for {b.barangay} yet.</p>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="5">
-                          {selectedBarangay === "All"
-                            ? "No confirmed households yet."
-                            : `No confirmed households in ${selectedBarangay} yet.`}
-                        </td>
+                        <td colSpan="6">No barangays found.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+                )}</Paginated>
             </article>
           </section>
         )}
@@ -847,6 +911,7 @@ function CSWDDashboard() {
                 </span>
               </div>
 
+                <Paginated items={filteredHouseholds} resetKey={selectedBarangay}>{(pageRows) => (
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -861,7 +926,7 @@ function CSWDDashboard() {
                   </thead>
                   <tbody>
                     {filteredHouseholds.length > 0 ? (
-                      filteredHouseholds.map((h) => (
+                      pageRows.map((h) => (
                         <tr key={h.id}>
                           <td>{h.family_name} Family ({h.id})</td>
                           <td>{h.barangay}</td>
@@ -901,6 +966,7 @@ function CSWDDashboard() {
                   </tbody>
                 </table>
               </div>
+                )}</Paginated>
             </section>
         )}
 
@@ -926,6 +992,7 @@ function CSWDDashboard() {
               </span>
             </div>
 
+              <Paginated items={filteredHouseholds} resetKey={selectedBarangay}>{(pageRows) => (
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -942,7 +1009,7 @@ function CSWDDashboard() {
                 </thead>
                 <tbody>
                   {filteredHouseholds.length > 0 ? (
-                    filteredHouseholds.map((h) => (
+                    pageRows.map((h) => (
                       <Fragment key={h.id}>
                         <tr
                           className="household-row"
@@ -1038,6 +1105,7 @@ function CSWDDashboard() {
                 </tbody>
               </table>
             </div>
+              )}</Paginated>
           </section>
         )}
 
@@ -1063,6 +1131,7 @@ function CSWDDashboard() {
               </span>
             </div>
 
+              <Paginated items={filteredEvacuationCenters} resetKey={selectedBarangay}>{(pageRows) => (
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -1071,11 +1140,12 @@ function CSWDDashboard() {
                     <th>Barangay</th>
                     <th>Status</th>
                     <th>Occupancy</th>
+                    <th>Households Inside</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredEvacuationCenters.length > 0 ? (
-                    filteredEvacuationCenters.map((center) => (
+                    pageRows.map((center) => (
                       <tr key={center.id}>
                         <td>{center.name}</td>
                         <td>{center.barangay}</td>
@@ -1085,11 +1155,12 @@ function CSWDDashboard() {
                           </span>
                         </td>
                         <td>{center.occupancy}</td>
+                        <td>{center.households_in_center ?? 0}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="4">
+                      <td colSpan="5">
                         {selectedBarangay === "All"
                           ? "No evacuation centers have been added yet."
                           : `No evacuation center is set up yet for ${selectedBarangay}.`}
@@ -1099,6 +1170,7 @@ function CSWDDashboard() {
                 </tbody>
               </table>
             </div>
+              )}</Paginated>
           </section>
         )}
 
@@ -1343,20 +1415,6 @@ function CSWDDashboard() {
                 {reportFormError && <p className="donation-form-error">{reportFormError}</p>}
 
                 <div className="donation-form-field">
-                  <label htmlFor="report_type">Report Type</label>
-                  <select
-                    id="report_type"
-                    value={reportForm.report_type}
-                    onChange={(e) => handleReportFieldChange("report_type", e.target.value)}
-                  >
-                    <option value="">Select a report type</option>
-                    {Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="donation-form-field">
                   <label htmlFor="report_disaster_type_id">Disaster Type</label>
                   <select
                     id="report_disaster_type_id"
@@ -1396,38 +1454,10 @@ function CSWDDashboard() {
 
                 <div className="donation-form-actions">
                   <button type="submit" className="action-btn" disabled={isSubmittingReport}>
-                    {isSubmittingReport ? "Saving…" : "Generate Report"}
+                    {isSubmittingReport ? "Preparing PDF…" : "Generate PDF Report"}
                   </button>
                 </div>
               </form>
-            </article>
-
-            <article className="panel">
-              <h2>Generated Reports</h2>
-              <ul className="reports-list">
-                {(dashboardData?.reports || []).length === 0 && (
-                  <p className="empty-state">No reports generated yet.</p>
-                )}
-                {(dashboardData?.reports || []).map((r) => {
-                  const isExpanded = expandedReportId === r.id;
-                  return (
-                    <li key={r.id} onClick={() => setExpandedReportId(isExpanded ? null : r.id)} style={{ cursor: "pointer", flexDirection: "column", alignItems: "stretch" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
-                        <div>
-                          <p className="report-title">{r.title}</p>
-                          <span className="report-date">
-                            {r.date}{r.generated_by ? ` · ${r.generated_by}` : ""}{r.disaster_type ? ` · ${r.disaster_type}` : ""}
-                          </span>
-                        </div>
-                        <span className={`activity-type type-${r.type === "situation" ? "alert" : r.type === "disaster_monitoring" ? "dispatch" : "report"}`}>
-                          {REPORT_TYPE_LABELS[r.type] || r.type}
-                        </span>
-                      </div>
-                      {isExpanded && <p className="panel-note" style={{ marginTop: "10px" }}>{r.content}</p>}
-                    </li>
-                  );
-                })}
-              </ul>
             </article>
           </section>
         )}

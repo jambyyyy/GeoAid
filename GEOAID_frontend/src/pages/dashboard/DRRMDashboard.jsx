@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./DRRMDashboard.css";
 import Sidebar from "../../components/sidebar";
+import { Paginated } from "../../components/Pagination";
 import EvacuationMap from "./EvacuationMap";
 import { API_URL } from "../../config";
 
@@ -115,6 +116,63 @@ const CELL_INPUT_STYLE = {
 function DRRMDashboard() {
   const navigate = useNavigate();
   const username = sessionStorage.getItem("geoaid_user") || "DRRM Officer";
+
+  // --- Generate Report form: title + content -> downloadable PDF ---
+  const [reportForm, setReportForm] = useState({
+    title: "",
+    content: "",
+    disaster_type_id: "",
+  });
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportFormError, setReportFormError] = useState("");
+  const handleReportFieldChange = (field, value) => {
+    setReportForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleGenerateReport = async (e) => {
+    e.preventDefault();
+    setReportFormError("");
+
+    if (!reportForm.title.trim() || !reportForm.content.trim()) {
+      setReportFormError("Title and content are required.");
+      return;
+    }
+
+    setIsSubmittingReport(true);
+    try {
+      // The server builds the PDF (your title + content on top, then the
+      // latest data for your role) and sends it back as a download.
+      const response = await fetch(`${API_URL}/api/reports/pdf/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reportForm, username }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setReportFormError(data.message || "Could not generate this report. Please try again.");
+        return;
+      }
+
+      const cd = response.headers.get("Content-Disposition") || "";
+      const match = /filename="?([^"]+)"?/.exec(cd);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = match ? match[1] : "GeoAid_Report.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setReportForm({ title: "", content: "", disaster_type_id: "" });
+    } catch (err) {
+      console.error(err);
+      setReportFormError("Unable to connect to the server.");
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
 
   const [activeItem, setActiveItem] = usePersistedChoice("geoaid_drrm_page", "Dashboard", (v) => v in sectionInfo);
   const [locationSubTab, setLocationSubTab] = usePersistedChoice("geoaid_drrm_subtab", "Situations", (v) => ["Situations", "Routes"].includes(v)); // Situations | Routes
@@ -650,6 +708,7 @@ function DRRMDashboard() {
 
                 <section className="panel">
                   <h2>Disaster Situations</h2>
+                    <Paginated items={locationsData.disaster_types}>{(pageRows) => (
                   <div className="table-scroll">
                     <table className="data-table">
                       <thead>
@@ -663,7 +722,7 @@ function DRRMDashboard() {
                       </thead>
                       <tbody>
                         {locationsData.disaster_types.length > 0 ? (
-                          locationsData.disaster_types.map((dt) => {
+                          pageRows.map((dt) => {
                             const editing = editingSituationId === dt.id;
                             return (
                               <tr key={dt.id}>
@@ -774,6 +833,7 @@ function DRRMDashboard() {
                       </tbody>
                     </table>
                   </div>
+                    )}</Paginated>
                 </section>
 
                 {situationToDelete ? (() => {
@@ -927,6 +987,7 @@ function DRRMDashboard() {
 
                 <section className="panel">
                   <h2>Pinned Routes</h2>
+                    <Paginated items={routesData.routes}>{(pageRows) => (
                   <div className="table-scroll">
                     <table className="data-table">
                       <thead>
@@ -944,7 +1005,7 @@ function DRRMDashboard() {
                       </thead>
                       <tbody>
                         {routesData.routes.length > 0 ? (
-                          routesData.routes.map((r) => (
+                          pageRows.map((r) => (
                             <tr key={r.id}>
                               <td>{r.evacuation_center_name}</td>
                               <td>{r.barangay}</td>
@@ -1026,6 +1087,7 @@ function DRRMDashboard() {
                       </tbody>
                     </table>
                   </div>
+                    )}</Paginated>
                 </section>
               </>
             )}
@@ -1035,11 +1097,55 @@ function DRRMDashboard() {
         {activeItem === "Evacuation Map" && <EvacuationMap onRoutesChanged={fetchRoutes} />}
 
         {activeItem === "Reports" && (
-          <section className="panel">
-            <p className="panel-note">
-              Situation, disaster monitoring, and relief & vulnerability reports aren't backed by a real
-              model yet. Once connected, this section will list generated reports for city-wide review.
-            </p>
+          <section className="content-grid">
+            <article className="panel">
+              <h2>Generate Report</h2>
+              <form onSubmit={handleGenerateReport} style={{ display: "grid", gap: 14 }}>
+                {reportFormError && <p style={{ color: "#b42318", margin: 0 }}>{reportFormError}</p>}
+
+                <div style={{ display: "grid", gap: 6 }}>
+                  <label htmlFor="report_disaster_type_id">Disaster Type</label>
+                  <select
+                    id="report_disaster_type_id"
+                    value={reportForm.disaster_type_id}
+                    onChange={(e) => handleReportFieldChange("disaster_type_id", e.target.value)}
+                  >
+                    <option value="">Not tied to a specific disaster</option>
+                    {locationsData.disaster_types.map((dt) => (
+                      <option key={dt.id} value={dt.id}>{dt.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: "grid", gap: 6 }}>
+                  <label htmlFor="report_title">Title</label>
+                  <input
+                    id="report_title"
+                    type="text"
+                    value={reportForm.title}
+                    onChange={(e) => handleReportFieldChange("title", e.target.value)}
+                    placeholder="e.g. Weekly Relief & Vulnerability Report"
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: 6 }}>
+                  <label htmlFor="report_content">Content</label>
+                  <textarea
+                    id="report_content"
+                    rows={5}
+                    value={reportForm.content}
+                    onChange={(e) => handleReportFieldChange("content", e.target.value)}
+                    placeholder="Summarize the situation, relief activity, or disaster monitoring findings…"
+                  />
+                </div>
+
+                <div>
+                  <button type="submit" className="action-btn" disabled={isSubmittingReport}>
+                    {isSubmittingReport ? "Preparing PDF…" : "Generate PDF Report"}
+                  </button>
+                </div>
+              </form>
+            </article>
           </section>
         )}
 

@@ -5,7 +5,6 @@ from .views import (
     cswd_add_donation,
     cswd_add_relief_stock,
     cswd_record_relief,
-    cswd_update_relief_status,
     drrm_dashboard,
     drrm_routes,
     drrm_disaster_types,
@@ -21,6 +20,8 @@ from .views import (
     barangay_dashboard,
     barangay_confirm_household,
     barangay_evacuation_dashboard,
+    barangay_update_relief_status,
+    barangay_record_relief,
     attendance_scan,
     purok_dashboard,
     purok_review_household,
@@ -35,6 +36,7 @@ from .views import (
     resident_confirm_relief,
     resident_profile,
     resident_profile_update,
+    report_pdf,
 )
 
 urlpatterns = [
@@ -43,7 +45,6 @@ urlpatterns = [
     path("cswd/donations/add/", cswd_add_donation),
     path("cswd/relief/stock/add/", cswd_add_relief_stock),
     path("cswd/relief/record/", cswd_record_relief),
-    path("cswd/relief/status/", cswd_update_relief_status),
     path("drrm/dashboard/", drrm_dashboard),
     path("drrm/routes/", drrm_routes),
     path("drrm/disaster-types/", drrm_disaster_types),
@@ -59,6 +60,8 @@ urlpatterns = [
     path("barangay/dashboard/", barangay_dashboard),
     path("barangay/households/<str:household_code>/confirm/", barangay_confirm_household),
     path("barangay/evacuation/dashboard/", barangay_evacuation_dashboard),
+    path("barangay/relief/status/", barangay_update_relief_status),
+    path("barangay/relief/record/", barangay_record_relief),
     path("barangay/attendance/scan/", attendance_scan),
     path("purok/dashboard/", purok_dashboard),
     path("purok/households/<str:household_code>/review/", purok_review_household),
@@ -75,4 +78,7 @@ urlpatterns = [
     path("resident/relief-distribution/confirm/", resident_confirm_relief),
     path("resident/profile/", resident_profile),
     path("resident/profile/update/", resident_profile_update),
+
+    # PDF report (all staff dashboards)
+    path("reports/pdf/", report_pdf),
 ]

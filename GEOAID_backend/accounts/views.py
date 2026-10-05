@@ -13,10 +13,23 @@ import uuid
 from .models import (
     Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay,
     EvacuationRoute, ReliefStock, ReliefDistribution,
-    goods_label, GOODS_TYPES,
+    goods_label, GOODS_TYPES, DisasterType, Report,
+    VulnerabilityProfile, sync_vulnerability_profile, priority_from_flags,
 )
 from . import routing
 import re
+import io
+from xml.sax.saxutils import escape
+from django.http import HttpResponse
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.platypus import (
+    BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle,
+    KeepTogether,
+)
 
 # Explicit conversion to Philippine time — done here rather than relying
 # solely on settings.py's TIME_ZONE, so attendance timestamps display
@@ -253,22 +266,12 @@ def _serialize_households(households_qs):
                 "tag": tag,
             })
 
-        if h.is_four_ps:
-            flags.add("4Ps")
-
         # Priority classification from vulnerability flags. This is a
         # starting point, not a formula from a fixed spec — PWD/Pregnant
         # count double since those usually need more direct assistance
-        # than a 4Ps household ID alone. Adjust the weights below if you
-        # want a different priority formula.
-        weight = {"PWD": 2, "Pregnant": 2, "Elderly": 1, "Child<5": 1, "4Ps": 1}
-        priority_score = sum(weight.get(f, 0) for f in flags)
-        if priority_score >= 3:
-            priority_level = "High"
-        elif priority_score >= 1:
-            priority_level = "Medium"
-        else:
-            priority_level = "Low"
+        # than the other groups. Weights live in models.py.
+        # Same formula that VulnerabilityProfile stores (see models.py).
+        priority_score, priority_level = priority_from_flags(flags)
 
         present_records = present_by_household.get(h.id, [])
         checked_in = len(present_records) > 0
@@ -313,46 +316,141 @@ def _priority_beneficiary_counts(households_qs):
     }
 
 
-def _attach_relief_summary(households):
-    """Adds relief_status / relief_count / relief_last_* to each household
-    payload for the CSWD Beneficiary Checklist, based on its
-    ReliefDistribution records (cancelled releases are ignored)."""
+def _household_priorities(household_ids):
+    """{household_id: {"flags": [...], "priority_score": n, "priority_level": "High"}}
+    from the members' vulnerability flags — the same formula as
+    VulnerabilityProfile (models.priority_from_flags). One query for all
+    households."""
+    flag_sets = {hid: set() for hid in household_ids}
+    for m in FamilyMember.objects.filter(household_id__in=household_ids):
+        fl = flag_sets[m.household_id]
+        if m.is_pwd:
+            fl.add("PWD")
+        if m.is_pregnant:
+            fl.add("Pregnant")
+        if m.is_elderly:
+            fl.add("Elderly")
+        if m.is_child_under5:
+            fl.add("Child<5")
+    out = {}
+    for hid, fl in flag_sets.items():
+        score, level = priority_from_flags(fl)
+        out[hid] = {"flags": sorted(fl), "priority_score": score, "priority_level": level}
+    return out
 
-    codes = [h["id"] for h in households]
-    by_code = {}
+
+def _center_household_stats(center_ids):
+    """For each evacuation center id: the households currently checked in
+    (Attendance status 'Present'), with how many of their members are
+    present. Returns {center_id: [ {household_code, family_name,
+    barangay, purok, members_present}, ... ]} — the CSWD "households in
+    this evacuation center" view."""
+
+    by_center = {}
+    rows = (
+        Attendance.objects
+        .filter(evacuation_center_id__in=center_ids, attendance_status="Present")
+        .select_related("household")
+    )
+    for a in rows:
+        hh = by_center.setdefault(a.evacuation_center_id, {})
+        entry = hh.setdefault(a.household_id, {
+            "household_code": a.household.household_code,
+            "family_name": (a.household.full_name.split(" ")[-1] if a.household.full_name else a.household.household_code),
+            "barangay": a.household.barangay,
+            "purok": a.household.purok,
+            "members_present": 0,
+        })
+        entry["members_present"] += 1
+
+    # Vulnerability priority for every household inside a center, and the
+    # list ordered most-vulnerable first so they are served first.
+    all_ids = {hid for hh in by_center.values() for hid in hh}
+    prio = _household_priorities(all_ids)
+    result = {}
+    for cid, hh in by_center.items():
+        for hid, entry in hh.items():
+            entry.update(prio.get(hid, {"flags": [], "priority_score": 0, "priority_level": "Low"}))
+        result[cid] = sorted(
+            hh.values(), key=lambda e: (-e["priority_score"], e["family_name"])
+        )
+    return result
+
+
+def _households_in_center(center):
+    """Number of distinct households currently checked in at a center."""
+    return (
+        Attendance.objects
+        .filter(evacuation_center=center, attendance_status="Present")
+        .values("household_id").distinct().count()
+    )
+
+
+def _barangay_relief_overview(centers_payload):
+    """One row per barangay for the CSWD Relief Distribution tab: its
+    evacuation center(s), how many households are inside them, how many
+    confirmed households the barangay has, and the barangay's relief
+    release totals (cancelled releases ignored)."""
+
+    registered = {
+        row["barangay"]: row["n"]
+        for row in (
+            Household.objects.filter(registration_complete=True, status="confirmed")
+            .values("barangay").annotate(n=Count("id"))
+        )
+    }
+
+    releases = {}
     for r in (
         ReliefDistribution.objects
-        .filter(household__household_code__in=codes)
+        .filter(household__isnull=True, barangay__isnull=False)
         .exclude(claim_status="cancelled")
-        .select_related("household")
+        .select_related("barangay")
         .order_by("-distribution_date", "-id")
     ):
-        by_code.setdefault(r.household.household_code, []).append(r)
+        releases.setdefault(r.barangay.barangay_name, []).append(r)
 
-    for h in households:
-        records = by_code.get(h["id"], [])
-        claimed = [r for r in records if r.claim_status == "claimed"]
-        if any(r.claim_status == "ready" for r in records):
-            h["relief_status"] = "Ready for Pickup"
-        elif any(r.claim_status in ("processing", "pending") for r in records):
-            h["relief_status"] = "Processing"
+    centers_by_barangay = {}
+    for c in centers_payload:
+        centers_by_barangay.setdefault(c["barangay"], []).append(c)
+
+    names = list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True))
+    overview = []
+    for name in names:
+        recs = releases.get(name, [])
+        centers = centers_by_barangay.get(name, [])
+        claimed = [r for r in recs if r.claim_status == "claimed"]
+        if any(r.claim_status == "ready" for r in recs):
+            status = "Ready for Pickup"
+        elif any(r.claim_status in ("processing", "pending") for r in recs):
+            status = "Processing"
         elif claimed:
-            h["relief_status"] = "Relief Given"
+            status = "Relief Given"
         else:
-            h["relief_status"] = "Not Yet Given"
-        h["relief_count"] = len(claimed)
-        last = claimed[0] if claimed else None
-        h["relief_last_goods"] = last.get_goods_type_display() if last else ""
-        h["relief_last_quantity"] = last.quantity_given if last else 0
-        h["relief_last_date"] = _format_ph(last.distribution_date, "%b %d, %Y") if last else ""
-    return households
+            status = "Not Yet Given"
+        last = recs[0] if recs else None
+        overview.append({
+            "barangay": name,
+            "evacuation_centers": centers,
+            "households_in_evacuation": sum(c["households_in_center"] for c in centers),
+            "members_in_evacuation": sum(c["members_in_center"] for c in centers),
+            "registered_households": registered.get(name, 0),
+            "relief_status": status,
+            "releases": len(recs),
+            "quantity_released": sum(r.quantity_given for r in recs),
+            "last_goods": last.get_goods_type_display() if last else "",
+            "last_quantity": last.quantity_given if last else 0,
+            "last_date": _format_ph(last.distribution_date, "%b %d, %Y") if last else "",
+        })
+    return overview
 
 
 @csrf_exempt
 def cswd_dashboard(request):
     """City-wide CSWD view of every household that has cleared the full
     Purok President -> Barangay Staff review chain (status='confirmed').
-    Relief releases are backed by ReliefDistribution, and current
+    Relief releases are made per barangay (to its evacuation center) and
+    backed by ReliefDistribution, and current
     relief-goods stock (rice / pack) by ReliefStock — see
     cswd_record_relief and cswd_add_relief_stock below. Donations are
     backed by the Donation model (CSWD logs each drop-off themselves
@@ -374,22 +472,30 @@ def cswd_dashboard(request):
         | Q(family_members__is_pregnant=True)
         | Q(family_members__age__gte=60)
         | Q(family_members__age__lt=5)
-        | Q(is_four_ps=True)
     ).distinct().count()
 
     # Recent relief releases, newest first — replaces the old placeholder
     # that just listed every confirmed household as "Registered".
     relief_qs = (
         ReliefDistribution.objects
-        .select_related("household", "disaster_type")
+        .select_related("household", "disaster_type", "evacuation_center", "barangay")
         .order_by("-distribution_date")[:50]
     )
-    relief_distribution = [
-        {
+    relief_distribution = []
+    for r in relief_qs:
+        if r.household:  # legacy per-household release
+            barangay = r.household.barangay or "Unspecified"
+            target = (r.household.full_name.split(" ")[-1] + " Family") if r.household.full_name else r.household.household_code
+        else:
+            barangay = r.barangay.barangay_name if r.barangay else "Unspecified"
+            target = f"Brgy. {barangay}"
+        relief_distribution.append({
             "id": r.id,
-            "household_code": r.household.household_code,
-            "household": (r.household.full_name.split(" ")[-1] + " Family") if r.household.full_name else r.household.household_code,
-            "barangay": r.household.barangay or "Unspecified",
+            "household_code": r.household.household_code if r.household else "",
+            "household": target,
+            "barangay": barangay,
+            "evacuation_center": r.evacuation_center.name if r.evacuation_center else "",
+            "households_served": r.households_served,
             "goods_type": r.get_goods_type_display(),
             "quantity": r.quantity_given,
             "status": r.get_claim_status_display(),
@@ -398,9 +504,7 @@ def cswd_dashboard(request):
             "remarks": r.remarks,
             "date": _format_ph(r.distribution_date, "%b %d, %Y"),
             "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
-        }
-        for r in relief_qs
-    ]
+        })
 
     # Current relief-goods stock — what's actually left in storage. Only
     # two types exist: rice and pack (a pack holds all the other goods).
@@ -439,12 +543,37 @@ def cswd_dashboard(request):
         for dt in DisasterType.objects.order_by("-start_date", "disaster_type_name")
     ]
 
+    all_centers = list(EvacuationCenter.objects.all().order_by("barangay", "name"))
+    present_by_center = _center_household_stats([c.id for c in all_centers])
+    centers_payload = []
+    for c in all_centers:
+        present = present_by_center.get(c.id, [])
+        centers_payload.append({
+            "id": c.id,
+            "name": c.name,
+            "barangay": c.barangay,
+            "occupancy": f"{c.current_occupancy} / {c.capacity}",
+            "occupancy_pct": round((c.current_occupancy / c.capacity) * 100) if c.capacity else 0,
+            "status": c.status,
+            # Households / people currently checked in at this center.
+            "households_in_center": len(present),
+            "members_in_center": sum(h["members_present"] for h in present),
+            "households": sorted(present, key=lambda h: h["family_name"]),
+        })
+
     data = {
         "total_households": confirmed_qs.count(),
         "priority_cases": priority_cases,
         # Total packs handed out across every release on record (not
         # what's left — that's relief_stock below).
-        "relief_released": ReliefDistribution.objects.aggregate(total=Sum("quantity_given"))["total"] or 0,
+        # Barangay batches + legacy direct releases only — what barangays
+        # later hand out to households is part of those batches, so it is
+        # not counted again here.
+        "relief_released": (
+            ReliefDistribution.objects.filter(Q(household__isnull=True) | Q(barangay__isnull=True))
+            .exclude(claim_status="cancelled")
+            .aggregate(total=Sum("quantity_given"))["total"] or 0
+        ),
         "donations": donations_qs.count(),
 
         "relief_distribution": relief_distribution,
@@ -457,19 +586,12 @@ def cswd_dashboard(request):
         # stay in sync with whatever barangays actually exist.
         "barangays": list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)),
 
-        "evacuation_centers": [
-            {
-                "id": c.id,
-                "name": c.name,
-                "barangay": c.barangay,
-                "occupancy": f"{c.current_occupancy} / {c.capacity}",
-                "occupancy_pct": round((c.current_occupancy / c.capacity) * 100) if c.capacity else 0,
-                "status": c.status,
-            }
-            for c in EvacuationCenter.objects.all().order_by("barangay", "name")
-        ],
+        "evacuation_centers": centers_payload,
+        # One row per barangay: its evacuation center(s), households
+        # currently inside them, and the barangay's relief status.
+        "barangay_relief": _barangay_relief_overview(centers_payload),
 
-        "households": _attach_relief_summary(_serialize_households(confirmed_qs)),
+        "households": _serialize_households(confirmed_qs),
     }
 
     return JsonResponse(data)
@@ -633,10 +755,12 @@ def cswd_add_relief_stock(request):
 
 @csrf_exempt
 def cswd_record_relief(request):
-    """Logs a relief release to a household (the ERD's relief_distribution
-    entity) and deducts the released quantity from ReliefStock for that
-    goods_type. Fails with a 400 if there isn't enough of that goods
-    type left in storage, so stock can never go negative."""
+    """Logs a relief release to a BARANGAY (its evacuation center) — no
+    longer to an individual household — and deducts the released quantity
+    from ReliefStock for that goods_type. Fails with a 400 if there isn't
+    enough of that goods type left in storage, so stock can never go
+    negative. The number of households inside the evacuation center at
+    the time is saved on the release (households_served)."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -649,13 +773,16 @@ def cswd_record_relief(request):
     except json.JSONDecodeError:
         return JsonResponse({"message": "Invalid JSON body."}, status=400)
 
-    household_code = (payload.get("household_code") or "").strip()
+    barangay_obj = Barangay.objects.filter(
+        barangay_name__iexact=(payload.get("barangay") or "").strip()
+    ).first()
+    barangay = barangay_obj.barangay_name if barangay_obj else ""
     goods_type = _clean_goods_name(payload.get("goods_type"))
     remarks = (payload.get("remarks") or "").strip()
     username = (payload.get("username") or "").strip()
 
-    if not household_code or not goods_type:
-        return JsonResponse({"message": "Household and goods type (Rice or Pack) are required."}, status=400)
+    if not barangay_obj or not goods_type:
+        return JsonResponse({"message": "Barangay and goods type (Rice or Pack) are required."}, status=400)
 
     try:
         quantity = int(payload.get("quantity"))
@@ -664,9 +791,27 @@ def cswd_record_relief(request):
     except (TypeError, ValueError):
         return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
 
-    household = Household.objects.filter(household_code=household_code).first()
-    if not household:
-        return JsonResponse({"message": "Selected household was not found."}, status=400)
+    # Evacuation center the goods go to: the one picked in the form, or —
+    # if the barangay has exactly one — that one automatically.
+    center = None
+    center_id = payload.get("evacuation_center_id")
+    barangay_centers = EvacuationCenter.objects.filter(barangay__iexact=barangay)
+    if center_id:
+        center = barangay_centers.filter(id=center_id).first()
+        if not center:
+            return JsonResponse({"message": f"That evacuation center is not in {barangay}."}, status=400)
+    elif barangay_centers.count() == 1:
+        center = barangay_centers.first()
+
+    # How many households this release covers: those currently inside the
+    # evacuation center, or all confirmed households of the barangay when
+    # the barangay has no center set up.
+    if center:
+        households_served = _households_in_center(center)
+    else:
+        households_served = Household.objects.filter(
+            registration_complete=True, status="confirmed", barangay__iexact=barangay
+        ).count()
 
     disaster_type = None
     disaster_type_id = payload.get("disaster_type_id")
@@ -689,7 +834,10 @@ def cswd_record_relief(request):
             stock.save()
 
             relief = ReliefDistribution.objects.create(
-                household=household,
+                household=None,
+                barangay=barangay_obj,
+                evacuation_center=center,
+                households_served=households_served,
                 disaster_type=disaster_type,
                 goods_type=stock.goods_type,
                 quantity_given=quantity,
@@ -702,7 +850,9 @@ def cswd_record_relief(request):
     return JsonResponse({
         "success": True,
         "relief": {
-            "household_code": household.household_code,
+            "barangay": barangay,
+            "evacuation_center": center.name if center else "",
+            "households_served": households_served,
             "goods_type": relief.get_goods_type_display(),
             "quantity": relief.quantity_given,
             "tracking_number": relief.tracking_number,
@@ -715,13 +865,153 @@ def cswd_record_relief(request):
     })
 
 
+def _barangay_relief_pool(barangay_obj):
+    """Relief goods a barangay can still give to households, per goods
+    type: everything CSWD released to it that has been marked Received,
+    minus what it already handed out to households (cancelled ignored)."""
+
+    pool = {g: 0 for g in GOODS_TYPES}
+    received = (
+        ReliefDistribution.objects
+        .filter(barangay=barangay_obj, household__isnull=True, claim_status="claimed")
+        .values("goods_type").annotate(q=Sum("quantity_given"))
+    )
+    given = (
+        ReliefDistribution.objects
+        .filter(barangay=barangay_obj, household__isnull=False)
+        .exclude(claim_status="cancelled")
+        .values("goods_type").annotate(q=Sum("quantity_given"))
+    )
+    for row in received:
+        key = (row["goods_type"] or "").lower()
+        if key in pool:
+            pool[key] += row["q"] or 0
+    for row in given:
+        key = (row["goods_type"] or "").lower()
+        if key in pool:
+            pool[key] -= row["q"] or 0
+    return {k: max(v, 0) for k, v in pool.items()}
+
+
 @csrf_exempt
-def cswd_update_relief_status(request):
-    """Lets CSWD staff move an open relief release between "processing"
-    and "ready" (for pickup). Marking a release as claimed is NOT
-    possible here — only the resident can do that, by confirming receipt
-    in the mobile app (resident_confirm_relief). Once a release is
-    claimed it is locked and CSWD can no longer edit it."""
+def barangay_record_relief(request):
+    """Barangay Staff give relief goods to a household that is currently
+    checked in at one of THEIR barangay's evacuation centers. The goods
+    come out of the barangay's own pool (what CSWD released to the
+    barangay and was marked Received), not directly out of CSWD storage,
+    so it fails with a 400 when the barangay doesn't have enough left."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    username = (payload.get("username") or "").strip()
+    valid_barangay = _barangay_for_username(username)
+    if not valid_barangay:
+        return JsonResponse({
+            "message": "Couldn't determine this account's barangay. "
+                       "Set its First Name in Django admin > Users to its barangay.",
+        }, status=403)
+    barangay_obj = Barangay.objects.filter(barangay_name__iexact=valid_barangay).first()
+
+    household_code = (payload.get("household_code") or "").strip()
+    goods_type = _clean_goods_name(payload.get("goods_type"))
+    remarks = (payload.get("remarks") or "").strip()
+
+    if not household_code or not goods_type:
+        return JsonResponse({"message": "Household and goods type (Rice or Pack) are required."}, status=400)
+
+    try:
+        quantity = int(payload.get("quantity"))
+        if quantity <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+
+    household = Household.objects.filter(household_code=household_code).first()
+    if not household:
+        return JsonResponse({"message": "Selected household was not found."}, status=400)
+
+    # The household must currently be checked in at this barangay's center.
+    attendance = (
+        Attendance.objects
+        .filter(household=household, attendance_status="Present",
+                evacuation_center__barangay__iexact=valid_barangay)
+        .select_related("evacuation_center")
+        .order_by("-check_in_time")
+        .first()
+    )
+    if not attendance:
+        return JsonResponse({
+            "message": f"{household.full_name}'s household is not checked in at an evacuation center in {valid_barangay}.",
+        }, status=400)
+
+    disaster_type = None
+    disaster_type_id = payload.get("disaster_type_id")
+    if disaster_type_id:
+        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
+        if not disaster_type:
+            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+
+    with transaction.atomic():
+        # Lock this barangay's batches so two staff can't both spend the
+        # same remaining goods.
+        list(ReliefDistribution.objects.select_for_update().filter(barangay=barangay_obj, household__isnull=True))
+        pool = _barangay_relief_pool(barangay_obj)
+        left = pool.get(goods_type, 0)
+        if left < quantity:
+            return JsonResponse({
+                "message": f"Not enough {goods_type} left for your barangay (only {left} received and available).",
+            }, status=400)
+
+        relief = ReliefDistribution.objects.create(
+            household=household,
+            barangay=barangay_obj,
+            evacuation_center=attendance.evacuation_center,
+            households_served=1,
+            disaster_type=disaster_type,
+            goods_type=goods_type,
+            quantity_given=quantity,
+            distributed_by=username,
+            remarks=remarks,
+        )
+        pool = _barangay_relief_pool(barangay_obj)
+
+    return JsonResponse({
+        "success": True,
+        "relief": {
+            "id": relief.id,
+            "household_code": household.household_code,
+            "family_name": household.full_name.split(" ")[-1] if household.full_name else household.household_code,
+            "evacuation_center": attendance.evacuation_center.name,
+            "goods_type": relief.get_goods_type_display(),
+            "quantity": relief.quantity_given,
+            "tracking_number": relief.tracking_number,
+            "claim_status": relief.claim_status,
+            "status": relief.get_claim_status_display(),
+            "date": _format_ph(relief.distribution_date, "%b %d, %Y"),
+        },
+        "relief_pool": pool,
+    })
+
+
+@csrf_exempt
+def barangay_update_relief_status(request):
+    """Barangay Staff update relief releases of THEIR barangay.
+    - A batch CSWD released to the barangay can only be confirmed as
+      Received (claimed) — this is the barangay confirming the goods
+      arrived. CSWD has no status actions; it just sees the result.
+    - A release the barangay gave to a household moves through
+      Processing -> Ready for Pickup -> Received.
+    Scoped to the staff account's barangay (First Name in Django admin).
+    Once Received, a release is locked."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -737,13 +1027,15 @@ def cswd_update_relief_status(request):
     new_status = (payload.get("status") or "").strip()
     username = (payload.get("username") or "").strip()
 
-    if new_status == "claimed":
-        return JsonResponse({
-            "message": "Only the resident can confirm receipt of their relief goods in the mobile app.",
-        }, status=400)
+    if new_status not in ("processing", "ready", "claimed"):
+        return JsonResponse({"message": "Status must be processing, ready or claimed."}, status=400)
 
-    if new_status not in ("processing", "ready"):
-        return JsonResponse({"message": "Status must be processing or ready."}, status=400)
+    valid_barangay = _barangay_for_username(username)
+    if not valid_barangay:
+        return JsonResponse({
+            "message": "Couldn't determine this account's barangay. "
+                       "Set its First Name in Django admin > Users to its barangay.",
+        }, status=403)
 
     try:
         relief_id = int(payload.get("id"))
@@ -753,33 +1045,40 @@ def cswd_update_relief_status(request):
     with transaction.atomic():
         relief = (
             ReliefDistribution.objects.select_for_update()
-            .select_related("household").filter(id=relief_id).first()
+            .select_related("barangay")
+            .filter(id=relief_id, barangay__barangay_name__iexact=valid_barangay)
+            .first()
         )
         if not relief:
-            return JsonResponse({"message": "Relief release not found."}, status=404)
+            return JsonResponse({"message": "Relief release not found for your barangay."}, status=404)
 
         if relief.claim_status == "claimed":
-            return JsonResponse({
-                "message": "The resident already confirmed receiving this relief, so it can no longer be edited.",
-            }, status=400)
+            return JsonResponse({"message": "This relief was already received, so it can no longer be edited."}, status=400)
 
         if relief.claim_status == "cancelled":
             return JsonResponse({"message": "This release was cancelled and can't be changed."}, status=400)
+
+        if relief.household_id is None and new_status != "claimed":
+            return JsonResponse({
+                "message": "Goods released to your barangay can only be confirmed as Received.",
+            }, status=400)
 
         if new_status == relief.claim_status:
             return JsonResponse({"message": "Release is already in that status."}, status=400)
 
         relief.claim_status = new_status
         relief.status_updated_by = username
+        if new_status == "claimed":
+            relief.claimed_at = timezone.now()
         relief.save()
 
     return JsonResponse({
         "success": True,
         "relief": {
             "id": relief.id,
-            "household_code": relief.household.household_code,
             "claim_status": relief.claim_status,
             "status": relief.get_claim_status_display(),
+            "claimed_at": _format_ph(relief.claimed_at, "%b %d, %Y %I:%M %p"),
         },
     })
 
@@ -1948,8 +2247,155 @@ def barangay_dashboard(request):
         .order_by("-created_at")
     )
 
+    # Evacuation center(s) of this barangay with the households currently
+    # checked in, and the relief CSWD has released to this barangay.
+    centers = list(EvacuationCenter.objects.filter(barangay__iexact=valid_barangay).order_by("id"))
+    present_by_center = _center_household_stats([c.id for c in centers])
+    centers_payload = []
+    for c in centers:
+        present = present_by_center.get(c.id, [])
+        centers_payload.append({
+            "id": c.id,
+            "name": c.name,
+            "occupancy": f"{c.current_occupancy} / {c.capacity}",
+            "status": c.status,
+            "households_in_center": len(present),
+            "members_in_center": sum(h["members_present"] for h in present),
+            "households": present,  # already ordered most-vulnerable first
+        })
+
+    # Relief the barangay gave to individual households — shown next to
+    # each checked-in household and in the "Relief Given to Households" table.
+    hh_relief_qs = list(
+        ReliefDistribution.objects
+        .filter(household__isnull=False, barangay__barangay_name__iexact=valid_barangay)
+        .exclude(claim_status="cancelled")
+        .select_related("household", "evacuation_center")
+        .order_by("-distribution_date", "-id")[:100]
+    )
+    household_relief = [
+        {
+            "id": r.id,
+            "tracking_number": r.tracking_number,
+            "household_code": r.household.household_code,
+            "family_name": r.household.full_name.split(" ")[-1] if r.household.full_name else r.household.household_code,
+            "evacuation_center": r.evacuation_center.name if r.evacuation_center else "",
+            "goods_type": r.get_goods_type_display(),
+            "quantity": r.quantity_given,
+            "claim_status": r.claim_status,
+            "status": r.get_claim_status_display(),
+            "date": _format_ph(r.distribution_date, "%b %d, %Y"),
+            "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
+        }
+        for r in hh_relief_qs
+    ]
+    relief_by_household = {}
+    for r in hh_relief_qs:
+        relief_by_household.setdefault(r.household.household_code, []).append(r)
+    for c in centers_payload:
+        for h in c["households"]:
+            recs = relief_by_household.get(h["household_code"], [])
+            if any(r.claim_status == "ready" for r in recs):
+                h["relief_status"] = "Ready for Pickup"
+            elif any(r.claim_status in ("processing", "pending") for r in recs):
+                h["relief_status"] = "Processing"
+            elif recs:
+                h["relief_status"] = "Relief Given"
+            else:
+                h["relief_status"] = "Not Yet Given"
+            last = recs[0] if recs else None
+            h["relief_last"] = (
+                f"{last.quantity_given}x {last.get_goods_type_display()} · {_format_ph(last.distribution_date, '%b %d, %Y')}"
+                if last else ""
+            )
+
+    barangay_row = Barangay.objects.filter(barangay_name__iexact=valid_barangay).first()
+
+    relief_releases = [
+        {
+            "id": r.id,
+            "tracking_number": r.tracking_number,
+            "evacuation_center": r.evacuation_center.name if r.evacuation_center else "",
+            "households_served": r.households_served,
+            "goods_type": r.get_goods_type_display(),
+            "quantity": r.quantity_given,
+            "claim_status": r.claim_status,
+            "status": r.get_claim_status_display(),
+            "remarks": r.remarks,
+            "date": _format_ph(r.distribution_date, "%b %d, %Y"),
+            "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
+        }
+        for r in (
+            ReliefDistribution.objects
+            .filter(household__isnull=True, barangay__barangay_name__iexact=valid_barangay)
+            .exclude(claim_status="cancelled")
+            .select_related("evacuation_center")
+            .order_by("-distribution_date", "-id")[:50]
+        )
+    ]
+
+    # Vulnerability profiles (ERD: vulnerability_profiling) for this
+    # barangay's confirmed households — recomputed from the latest member
+    # flags, then read back ranked by priority.
+    confirmed_qs = households_qs.filter(status="confirmed")
+    for hh in confirmed_qs:
+        sync_vulnerability_profile(hh)
+
+    profile_rows = (
+        VulnerabilityProfile.objects
+        .filter(household__in=confirmed_qs)
+        .select_related("household", "family_member", "disaster_type")
+        .order_by("-priority_score", "household__full_name", "id")
+    )
+    vulnerability_profiles = []
+    seen_households = set()
+    for vp in profile_rows:
+        if vp.household_id in seen_households:
+            continue  # several active disasters share the same score; list each household once
+        seen_households.add(vp.household_id)
+        hh = vp.household
+        vulnerability_profiles.append({
+            "id": vp.id,
+            "household_code": hh.household_code,
+            "family_name": hh.full_name.split(" ")[-1] if hh.full_name else hh.household_code,
+            "purok": hh.purok or "—",
+            "flags": vp.flag_list,
+            "priority_score": vp.priority_score,
+            "priority_level": vp.priority_level,
+            "key_member": vp.family_member.full_name if vp.family_member else "",
+            "disaster": vp.disaster_type.disaster_type_name if vp.disaster_type else "",
+            "members": hh.family_members.count(),
+            "updated": _format_ph(vp.updated_at, "%b %d, %Y %I:%M %p"),
+        })
+
+    beneficiary = _priority_beneficiary_counts(confirmed_qs)
+    vulnerability_summary = {
+        "households": len(vulnerability_profiles),
+        "senior_citizens": beneficiary["senior_citizens"],
+        "pwd": beneficiary["pwd"],
+        "pregnant": beneficiary["pregnant"],
+        "children": beneficiary["children"],
+        "high": sum(1 for v in vulnerability_profiles if v["priority_level"] == "High"),
+        "medium": sum(1 for v in vulnerability_profiles if v["priority_level"] == "Medium"),
+        "low": sum(1 for v in vulnerability_profiles if v["priority_level"] == "Low"),
+    }
+
     data = {
         "barangay": valid_barangay,
+        "vulnerability_summary": vulnerability_summary,
+        "vulnerability_profiles": vulnerability_profiles,
+        "evacuation_centers": centers_payload,
+        "households_in_evacuation": sum(c["households_in_center"] for c in centers_payload),
+        "relief_releases": relief_releases,
+        "household_relief": household_relief,
+        "relief_pool": _barangay_relief_pool(barangay_row) if barangay_row else {g: 0 for g in GOODS_TYPES},
+        "disaster_types": [
+            {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
+            for dt in DisasterType.objects.filter(status="active").order_by("-start_date", "disaster_type_name")
+        ],
+        "relief_released": sum(
+            r["quantity"] for r in relief_releases
+        ),
         "total_households": households_qs.filter(status="confirmed").count(),
         "pending_confirmation": households_qs.filter(status="approved").count(),
         "rejected_households": households_qs.filter(status="rejected").count(),
@@ -2016,6 +2462,9 @@ def barangay_confirm_household(request, household_code):
         household.status = "confirmed" if action == "confirm" else "rejected"
         household.save()
 
+        if household.status == "confirmed":
+            sync_vulnerability_profile(household)
+
         return JsonResponse({
             "success": True,
             "household_code": household.household_code,
@@ -2066,6 +2515,7 @@ def barangay_evacuation_dashboard(request):
     # oldest). Attendance/check-in scanning below still targets a single
     # center ("center", the oldest by id) — that flow is unchanged.
     all_centers_qs = EvacuationCenter.objects.filter(barangay__iexact=valid_barangay).order_by("id")
+    present_by_center = _center_household_stats([c.id for c in all_centers_qs])
     evacuation_centers = [
         {
             "id": c.id,
@@ -2074,6 +2524,7 @@ def barangay_evacuation_dashboard(request):
             "occupancy": c.current_occupancy,
             "capacity": c.capacity,
             "status": c.status,
+            "households_in_center": len(present_by_center.get(c.id, [])),
         }
         for c in all_centers_qs
     ]
@@ -2332,9 +2783,6 @@ def purok_dashboard(request):
                 "tag": tag,
             })
 
-        if h.is_four_ps:
-            flags.add("4Ps")
-
         households.append({
             "id": h.household_code,
             "family_name": h.full_name.split(" ")[-1] if h.full_name else "Household",
@@ -2561,7 +3009,7 @@ def register_complete(request):
     """Steps 2-4 of registration (Household / Members / Vulnerability),
     submitted together by Register.jsx's handleFinish once all four
     steps are filled in. Looks the household up by mobile_number (set
-    in Step 1 via register_resident) and fills in address/dwelling/4Ps
+    in Step 1 via register_resident) and fills in address/dwelling
     fields, then (re)creates its FamilyMember rows."""
 
     if request.method == "OPTIONS":
@@ -2616,7 +3064,6 @@ def register_complete(request):
         household.dwelling_type = data.get("dwelling_type") or ""
         household.gps_lat = data.get("gps_lat")
         household.gps_lng = data.get("gps_lng")
-        household.is_four_ps = bool(data.get("is_four_ps"))
         household.registration_complete = True
         household.save()
 
@@ -2701,8 +3148,6 @@ def resident_dashboard(request):
             flags.append("Elderly")
         if member.is_child_under5:
             flags.append("Child<5")
-        if household.is_four_ps:
-            flags.append("4Ps")
 
         members.append({
             "id": member.id,
@@ -2808,10 +3253,13 @@ def resident_relief_distribution(request):
     if not household:
         return JsonResponse({"success": False, "message": "Household not found."}, status=404)
 
+    # The releases the barangay gave to this household (barangay-level
+    # batches are not shown to residents).
     records = list(
         ReliefDistribution.objects
         .filter(household=household)
         .exclude(claim_status="cancelled")
+        .select_related("barangay")
         .order_by("-distribution_date", "-id")
     )
 
@@ -2826,16 +3274,23 @@ def resident_relief_distribution(request):
             "tracking_number": r.tracking_number,
             "remarks": r.remarks,
             "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
+            # Barangay-level releases are marked received by CSWD, so the
+            # resident has nothing to confirm on those.
+            "scope": "household" if r.household_id else "barangay",
+            "barangay": r.barangay.barangay_name if r.barangay else "",
         }
 
     history = [_serialize(r) for r in records]
     last_claimed = next((r for r in records if r.claim_status == "claimed"), None)
 
     # Headline status for the top card: something to pick up first, then
-    # something being prepared, then what was already received.
-    if any(r.claim_status == "ready" for r in records):
+    # something being prepared, then what was already received. Only the
+    # household's own "ready" releases show as "ready" (that is what
+    # triggers the app's confirm button); barangay-level ones show as
+    # "processing" until CSWD marks them received.
+    if any(r.claim_status == "ready" and r.household_id for r in records):
         status = "ready"
-    elif any(r.claim_status in ("processing", "pending") for r in records):
+    elif any(r.claim_status in ("processing", "pending", "ready") for r in records):
         status = "processing"
     elif last_claimed:
         status = "received"
@@ -2930,8 +3385,6 @@ def _serialize_profile(household):
             flags.append("Elderly")
         if m.is_child_under5:
             flags.append("Child<5")
-        if household.is_four_ps:
-            flags.append("4Ps")
         members.append({
             "full_name": m.full_name,
             "relation": "Head of Household" if m.relation == "Head" else m.relation,
@@ -3018,3 +3471,535 @@ def resident_profile_update(request):
 
     household.save()
     return JsonResponse(_serialize_profile(household))
+
+
+# =====================================================================
+# PDF REPORTS  (paste at the very bottom of views.py)
+# =====================================================================
+
+# ------------------------------------------------------------------ styles
+NAVY = colors.HexColor("#12355B")
+TEAL = colors.HexColor("#1B8A8F")
+LIGHT = colors.HexColor("#EAF3F4")
+GREY = colors.HexColor("#5A6672")
+LINE = colors.HexColor("#C9D5DB")
+RED = colors.HexColor("#B42318")
+
+_base = ParagraphStyle("b", fontName="Helvetica", fontSize=9.5, leading=14,
+                       textColor=colors.HexColor("#1F2933"))
+H1 = ParagraphStyle("h1", parent=_base, fontName="Helvetica-Bold", fontSize=13,
+                    leading=17, textColor=NAVY, spaceBefore=12, spaceAfter=5)
+CELL = ParagraphStyle("c", parent=_base, fontSize=8.3, leading=11)
+CELLB = ParagraphStyle("cb", parent=CELL, fontName="Helvetica-Bold", textColor=colors.white)
+NOTE = ParagraphStyle("n", parent=_base, fontSize=8.5, leading=12, textColor=GREY)
+
+PAGE_W = A4[0] - 36 * mm  # usable width
+
+
+def _p(text, style=_base):
+    return Paragraph(escape(str(text)) if text is not None else "", style)
+
+
+def _table(head, rows, widths, empty="No records."):
+    if not rows:
+        return _p(empty, NOTE)
+    data = [[Paragraph(escape(h), CELLB) for h in head]]
+    data += [[Paragraph(escape(str(c)), CELL) for c in r] for r in rows]
+    t = Table(data, colWidths=[w * PAGE_W for w in widths], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return t
+
+
+def _kpis(pairs):
+    """Row of big-number boxes: [(label, value), ...]"""
+    n = len(pairs)
+    cells = [[Paragraph(
+        f'<font size="17" color="#12355B"><b>{escape(str(v))}</b></font><br/>'
+        f'<font size="7.5" color="#5A6672">{escape(l)}</font>',
+        ParagraphStyle("k", parent=_base, leading=20, alignment=1)) for l, v in pairs]]
+    t = Table(cells, colWidths=[PAGE_W / n] * n)
+    t.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.6, LINE), ("INNERGRID", (0, 0), (-1, -1), 0.6, LINE),
+        ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
+        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return t
+
+
+def _section(title, *flowables):
+    return [KeepTogether([Paragraph(escape(title), H1)] + list(flowables[:1]))] + list(flowables[1:])
+
+
+class _NumberedCanvas(rl_canvas.Canvas):
+    """Adds 'Page x of y' and the footer to every page."""
+    footer_text = "GeoAid"
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._saved = []
+
+    def showPage(self):
+        self._saved.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved)
+        for state in self._saved:
+            self.__dict__.update(state)
+            self.setFont("Helvetica", 8)
+            self.setFillColor(GREY)
+            self.setStrokeColor(LINE)
+            self.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
+            self.drawString(18 * mm, 9.5 * mm, self.footer_text)
+            self.drawRightString(A4[0] - 18 * mm, 9.5 * mm, f"Page {self._pageNumber} of {total}")
+            super().showPage()
+        super().save()
+
+
+# ------------------------------------------------------------ data helpers
+def _flags_for(household):
+    flags = set()
+    for m in household.family_members.all():
+        if m.is_pwd:
+            flags.add("PWD")
+        if m.is_pregnant:
+            flags.add("Pregnant")
+        if m.is_elderly:
+            flags.add("Elderly")
+        if m.is_child_under5:
+            flags.add("Child<5")
+    return ", ".join(sorted(flags)) or "-"
+
+
+def _vulnerability_counts(hh_qs):
+    members = FamilyMember.objects.filter(household__in=hh_qs)
+    return {
+        "members": members.count(),
+        "senior": members.filter(age__gte=60).count(),
+        "pwd": members.filter(is_pwd=True).count(),
+        "pregnant": members.filter(is_pregnant=True).count(),
+        "child": members.filter(age__lt=5).count(),
+    }
+
+
+# --------------------------------------------------------------- sections
+def sec_registration(hh_qs, incomplete_qs=None):
+    c = {s: hh_qs.filter(status=s).count() for s in ("pending", "approved", "confirmed", "rejected")}
+    out = [_kpis([("Total registered", sum(c.values())), ("Pending (Purok)", c["pending"]),
+                  ("Awaiting Barangay", c["approved"]), ("Confirmed", c["confirmed"]),
+                  ("Rejected", c["rejected"])])]
+    if incomplete_qs is not None:
+        out += [Spacer(1, 3), _p(f"Households that started but did not finish registration: {incomplete_qs.count()}", NOTE)]
+    return _section("Household Registration Status", *out)
+
+
+def sec_vulnerability(hh_qs):
+    v = _vulnerability_counts(hh_qs)
+    return _section(
+        "Vulnerability Profile",
+        _kpis([("Members", v["members"]), ("Senior 60+", v["senior"]), ("PWD", v["pwd"]),
+               ("Pregnant", v["pregnant"]), ("Children <5", v["child"])]),
+    )
+
+
+def sec_households(hh_qs, title="Household List", limit=80):
+    hh = list(hh_qs.prefetch_related("family_members").order_by("barangay", "purok", "full_name")[:limit + 1])
+    more = len(hh) > limit
+    rows = [[h.household_code, h.full_name, h.barangay or "-", h.purok or "-",
+             h.family_members.count(), _flags_for(h), h.get_status_display()] for h in hh[:limit]]
+    out = [_table(["Code", "Representative", "Barangay", "Purok", "Members", "Priority flags", "Status"],
+                  rows, [.14, .18, .11, .12, .11, .17, .17], "No households.")]
+    if more:
+        out.append(_p(f"Showing the first {limit} households only.", NOTE))
+    return _section(title, *out)
+
+
+def sec_by_barangay(hh_qs):
+    rows = []
+    for b in Barangay.objects.order_by("barangay_name"):
+        h = hh_qs.filter(barangay__iexact=b.barangay_name)
+        n = h.count()
+        if not n:
+            continue
+        v = _vulnerability_counts(h)
+        rows.append([b.barangay_name, n, v["members"], v["senior"], v["pwd"], v["pregnant"], v["child"]])
+    return _section("Households by Barangay",
+                    _table(["Barangay", "Households", "Members", "Senior", "PWD", "Pregnant", "Child<5"],
+                           rows, [.28, .16, .14, .11, .10, .11, .10], "No confirmed households yet."))
+
+
+def _relief_qs(hh_qs, disaster_id=None):
+    # Household-level (legacy) releases for these households, plus the
+    # barangay-level releases for the barangays they belong to.
+    barangays = list(hh_qs.values_list("barangay", flat=True).distinct())  # names
+    qs = (
+        ReliefDistribution.objects
+        .filter(Q(household__in=hh_qs) | Q(household__isnull=True, barangay__barangay_name__in=barangays))
+        .select_related("household", "disaster_type", "barangay")
+    )
+    if disaster_id:
+        qs = qs.filter(disaster_type_id=disaster_id)
+    return qs
+
+
+def sec_relief(hh_qs, disaster_id=None, title="Relief Distribution", recent=25):
+    all_qs = _relief_qs(hh_qs, disaster_id)
+    # Totals use the barangay batches + legacy direct releases; the goods
+    # barangays hand to households are part of those batches.
+    qs = all_qs.filter(Q(household__isnull=True) | Q(barangay__isnull=True))
+    live = qs.exclude(claim_status="cancelled")
+    total = live.aggregate(t=Sum("quantity_given"))["t"] or 0
+    claimed = live.filter(claim_status="claimed").aggregate(t=Sum("quantity_given"))["t"] or 0
+    kp = _kpis([("Releases", live.count()), ("Quantity released", total),
+                ("Quantity claimed", claimed),
+                ("Barangays served", live.filter(barangay__isnull=False).values("barangay").distinct().count()),
+                ("Households given relief", all_qs.exclude(claim_status="cancelled")
+                 .filter(household__isnull=False).values("household").distinct().count())])
+    by_status = [[dict(ReliefDistribution.CLAIM_STATUS_CHOICES).get(r["claim_status"], r["claim_status"]),
+                  r["n"], r["q"] or 0]
+                 for r in qs.values("claim_status").annotate(n=Count("id"), q=Sum("quantity_given")).order_by("claim_status")]
+    by_goods = [[(r["goods_type"] or "").capitalize(), r["n"], r["q"] or 0]
+                for r in live.values("goods_type").annotate(n=Count("id"), q=Sum("quantity_given")).order_by("goods_type")]
+    last = [[r.tracking_number,
+             r.household.full_name if r.household else f"Brgy. {r.barangay.barangay_name if r.barangay else '-'} ({r.households_served} hh)",
+             (r.household.barangay if r.household else (r.barangay.barangay_name if r.barangay else "")) or "-", r.get_goods_type_display(),
+             r.quantity_given, r.get_claim_status_display(), _format_ph(r.distribution_date, "%b %d, %Y")]
+            for r in all_qs.order_by("-distribution_date")[:recent]]
+    return _section(
+        title, kp, Spacer(1, 6),
+        _table(["Claim status", "Releases", "Quantity"], by_status, [.5, .25, .25], "No relief records."),
+        Spacer(1, 6),
+        _table(["Goods type", "Releases", "Quantity"], by_goods, [.5, .25, .25], "No relief records."),
+        Spacer(1, 6), _p(f"Most recent releases (up to {recent})", NOTE),
+        _table(["Tracking no.", "Recipient", "Barangay", "Goods", "Qty", "Status", "Date"],
+               last, [.25, .19, .11, .09, .07, .14, .15], "No relief records."),
+    )
+
+
+def sec_stock():
+    rows = [[s.get_goods_type_display(), s.quantity, _format_ph(s.updated_at)] for s in ReliefStock.objects.all()]
+    return _section("Relief Goods Storage (current stock)",
+                    _table(["Goods type", "Quantity on hand", "Last updated"], rows, [.4, .3, .3], "No stock recorded."))
+
+
+def sec_donations(disaster_id=None, recent=20):
+    qs = Donation.objects.select_related("disaster_type")
+    if disaster_id:
+        qs = qs.filter(disaster_type_id=disaster_id)
+    by_status = [[dict(Donation.STATUS_CHOICES).get(r["status"], r["status"]), r["n"], r["q"] or 0]
+                 for r in qs.values("status").annotate(n=Count("id"), q=Sum("quantity")).order_by("status")]
+    last = [[d.donor_name, d.goods_type, d.quantity, d.donation_date.strftime("%b %d, %Y") if d.donation_date else "-",
+             d.get_status_display(), d.disaster_type.disaster_type_name if d.disaster_type else "-"]
+            for d in qs[:recent]]
+    return _section(
+        "Donations",
+        _kpis([("Donations logged", qs.count()), ("Total quantity", qs.aggregate(t=Sum("quantity"))["t"] or 0)]),
+        Spacer(1, 6),
+        _table(["Status", "Donations", "Quantity"], by_status, [.5, .25, .25], "No donations."),
+        Spacer(1, 6), _p(f"Most recent donations (up to {recent})", NOTE),
+        _table(["Donor", "Goods", "Qty", "Date", "Status", "Disaster"], last, [.24, .17, .08, .15, .14, .22], "No donations."),
+    )
+
+
+def sec_centers(barangay=None):
+    qs = EvacuationCenter.objects.order_by("barangay", "name")
+    if barangay:
+        qs = qs.filter(barangay__iexact=barangay)
+    rows = []
+    for c in qs:
+        pct = round(c.current_occupancy / c.capacity * 100) if c.capacity else 0
+        rows.append([c.name, c.barangay, f"{c.current_occupancy} / {c.capacity}", f"{pct}%", c.get_status_display()])
+    return _section("Evacuation Centers",
+                    _table(["Center", "Barangay", "Occupancy", "Used", "Status"], rows, [.32, .22, .16, .12, .18],
+                           "No evacuation centers."))
+
+
+def sec_attendance(barangay=None, disaster_id=None):
+    start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    qs = Attendance.objects.filter(check_in_time__gte=start).select_related("family_member", "evacuation_center")
+    if barangay:
+        qs = qs.filter(evacuation_center__barangay__iexact=barangay)
+    if disaster_id:
+        qs = qs.filter(disaster_type_id=disaster_id)
+    rows = [[a.family_member.full_name, a.evacuation_center.name, _format_ph(a.check_in_time, "%I:%M %p"),
+             _format_ph(a.check_out_time, "%I:%M %p") or "-", a.attendance_status]
+            for a in qs.order_by("-check_in_time")[:60]]
+    return _section(
+        "Evacuation Attendance (today)",
+        _kpis([("Check-ins today", qs.count()), ("Currently present", qs.filter(attendance_status="Present").count()),
+               ("Checked out", qs.filter(attendance_status="Checked Out").count())]),
+        Spacer(1, 6),
+        _table(["Name", "Center", "Check-in", "Check-out", "Status"], rows, [.28, .27, .13, .13, .19], "No check-ins today."),
+    )
+
+
+def sec_disasters():
+    rows = [[d.disaster_type_name, d.start_date or "-", d.end_date or "-", d.get_status_display(),
+             d.relief_distributions.count(), d.donations.count(), d.attendance_records.count()]
+            for d in DisasterType.objects.order_by("-start_date", "disaster_type_name")]
+    return _section("Disaster Situations",
+                    _table(["Disaster", "Start", "End", "Status", "Relief", "Donations", "Check-ins"],
+                           rows, [.28, .13, .13, .11, .10, .13, .12], "No disaster situations recorded."))
+
+
+def sec_routes():
+    qs = EvacuationRoute.objects.select_related("evacuation_center")
+    rows = [[r.start_location, r.evacuation_center.name, r.route_distance or "-", r.estimated_time or "-",
+             r.get_road_condition_display(), r.get_route_status_display()] for r in qs[:60]]
+    return _section("Evacuation Routes",
+                    _table(["From", "To center", "Distance", "Est. time", "Road condition", "Route status"],
+                           rows, [.22, .24, .11, .11, .16, .16], "No routes pinned."))
+
+
+def sec_written(w):
+    """The title / content typed into the Generate Report form."""
+    title = Paragraph(escape(w["title"]), ParagraphStyle(
+        "wt", parent=_base, fontName="Helvetica-Bold", fontSize=15, leading=19,
+        textColor=NAVY, spaceBefore=10, spaceAfter=3))
+    meta = f"Disaster: {w['disaster']}" if w["disaster"] else ""
+    body = Paragraph(escape(w["content"]).replace("\n", "<br/>"), _base)
+    return [title] + ([_p(meta, NOTE)] if meta else []) + [Spacer(1, 5), body, Spacer(1, 6)]
+
+
+def sec_resident(h):
+    prof = [
+        ["Household code", h.household_code], ["Representative", h.full_name], ["Mobile", h.mobile_number],
+        ["Barangay / Purok", f"{h.barangay or '-'} / {h.purok or '-'}"],
+        ["Address", h.address_line or "-"], ["Landmark", h.landmark or "-"],
+        ["Dwelling", h.get_dwelling_type_display() or "-"],
+        ["Registration status", h.get_status_display()],
+    ]
+    members = [[m.full_name, m.get_relation_display(), m.age,
+                ", ".join(f for f in ["PWD" if m.is_pwd else "", "Pregnant" if m.is_pregnant else "",
+                                      "Elderly" if m.is_elderly else "", "Child<5" if m.is_child_under5 else ""] if f) or "-"]
+               for m in h.family_members.all()]
+    relief = [[r.tracking_number, r.get_goods_type_display(), r.quantity_given, r.get_claim_status_display(),
+               _format_ph(r.distribution_date, "%b %d, %Y")]
+              for r in ReliefDistribution.objects
+              .filter(Q(household=h))
+              .exclude(claim_status="cancelled").order_by("-distribution_date")]
+    att = [[a.family_member.full_name, a.evacuation_center.name, _format_ph(a.check_in_time),
+            _format_ph(a.check_out_time) or "-", a.attendance_status]
+           for a in h.attendance_records.select_related("family_member", "evacuation_center").order_by("-check_in_time")[:15]]
+    return (
+        _section("My Household", _table(["Item", "Details"], prof, [.3, .7]))
+        + _section("Household Members", _table(["Name", "Relation", "Age", "Priority"], members, [.38, .22, .1, .3]))
+        + _section("My Relief Goods", _table(["Tracking no.", "Goods", "Qty", "Status", "Date"], relief,
+                                             [.28, .16, .1, .26, .2], "No relief received yet."))
+        + _section("My Evacuation Check-ins", _table(["Member", "Center", "Check-in", "Check-out", "Status"], att,
+                                                      [.22, .22, .22, .22, .12], "No check-ins."))
+    )
+
+
+# --------------------------------------------------------- who is asking?
+ROLE_LABEL = {
+    "resident": "Resident", "purok": "Purok President", "barangay": "Barangay Staff",
+    "cswd": "CSWD Personnel", "drrm": "DRRM Officer", "admin": "Administrator",
+}
+
+
+def _resolve_requester(mobile="", username=""):
+    """Returns (ctx dict, None) or (None, JsonResponse error)."""
+    mobile = (mobile or "").strip()
+    username = (username or "").strip()
+
+    if mobile:
+        h = Household.objects.filter(mobile_number=mobile).first()
+        if not h:
+            return None, JsonResponse({"success": False, "message": "Household not found."}, status=404)
+        return {"role": "resident", "name": h.full_name, "household": h, "user": None,
+                "scope": f"Household {h.household_code}"}, None
+
+    if not username:
+        return None, JsonResponse({"success": False, "message": "username or mobile_number is required."}, status=400)
+
+    user = User.objects.filter(username=username).first()
+    if not user:
+        return None, JsonResponse({"success": False, "message": "User not found."}, status=404)
+
+    role = ""
+    g = user.groups.first()
+    if g:
+        role = GROUP_ROLE_MAP.get(g.name.strip().lower(), "")
+    if not role and user.is_superuser:
+        role = "admin"
+    if not role:
+        return None, JsonResponse({"success": False, "message": "This account has no recognized role."}, status=403)
+
+    ctx = {"role": role, "name": user.get_full_name() or user.username, "user": user,
+           "barangay": "", "purok": "", "scope": "City-wide"}
+    if role in ("purok", "barangay"):
+        ctx["barangay"] = _match_barangay(user.first_name)
+        if not ctx["barangay"]:
+            return None, JsonResponse({"success": False,
+                "message": "Set this account's First Name to its barangay in Django admin > Users."}, status=403)
+        ctx["scope"] = f"Brgy. {ctx['barangay']}"
+        if role == "purok":
+            ctx["purok"] = _purok_for_username(username, ctx["barangay"])
+            if ctx["purok"]:
+                ctx["scope"] += f", {ctx['purok']}"
+    return ctx, None
+
+
+# ------------------------------------------------------------- PDF builder
+def build_report_pdf(ctx, disaster_id=None, written=None):
+    role = ctx["role"]
+    now = _format_ph(timezone.now(), "%B %d, %Y %I:%M %p")
+    disaster = DisasterType.objects.filter(pk=disaster_id).first() if disaster_id else None
+
+    complete = Household.objects.filter(registration_complete=True)
+    confirmed = complete.filter(status="confirmed")
+    story = sec_written(written) if written else []
+
+    if role == "resident":
+        story += sec_resident(ctx["household"])
+        title = "Household Report"
+    elif role == "purok":
+        qs = complete.filter(barangay__iexact=ctx["barangay"])
+        if ctx["purok"]:
+            qs = qs.filter(purok__iexact=ctx["purok"])
+        story += sec_registration(qs)
+        story += sec_vulnerability(qs)
+        story += sec_households(qs)
+        story += sec_relief(qs, disaster_id)
+        title = "Purok Registration Report"
+    elif role == "barangay":
+        b = ctx["barangay"]
+        qs = complete.filter(barangay__iexact=b)
+        story += sec_registration(qs, Household.objects.filter(registration_complete=False, barangay__iexact=b))
+        story += sec_vulnerability(qs.filter(status="confirmed"))
+        story += sec_households(qs.exclude(status="pending"), "Households (reviewed by Purok President)")
+        story += sec_relief(qs, disaster_id)
+        story += sec_centers(b)
+        story += sec_attendance(b, disaster_id)
+        title = "Barangay Report"
+    elif role == "cswd":
+        story += sec_registration(confirmed)
+        story += sec_vulnerability(confirmed)
+        story += sec_by_barangay(confirmed)
+        story += sec_relief(confirmed, disaster_id)
+        story += sec_stock()
+        story += sec_donations(disaster_id)
+        story += sec_centers()
+        story += sec_disasters()
+        title = "CSWD Relief & Vulnerability Report"
+    elif role == "drrm":
+        story += sec_registration(confirmed)
+        story += sec_vulnerability(confirmed)
+        story += sec_by_barangay(confirmed)
+        story += sec_disasters()
+        story += sec_centers()
+        story += sec_routes()
+        story += sec_attendance(None, disaster_id)
+        title = "DRRM Situation Report"
+    else:  # admin: everything
+        story += sec_registration(complete, Household.objects.filter(registration_complete=False))
+        story += sec_vulnerability(confirmed)
+        story += sec_by_barangay(confirmed)
+        story += sec_relief(complete, disaster_id)
+        story += sec_stock()
+        story += sec_donations(disaster_id)
+        story += sec_disasters()
+        story += sec_centers()
+        story += sec_routes()
+        story += sec_attendance(None, disaster_id)
+        title = "GeoAid System Report"
+
+    head = Table([[Paragraph(
+        f'<font color="white" size="16"><b>GeoAid</b></font><br/>'
+        f'<font color="white" size="12">{escape(title)}</font>',
+        ParagraphStyle("hd", parent=_base, leading=20))]], colWidths=[PAGE_W])
+    head.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), NAVY), ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                              ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10)]))
+    meta = Table([
+        [_p("Prepared for", NOTE), _p(f"{ctx['name']} ({ROLE_LABEL[role]})")],
+        [_p("Scope", NOTE), _p(ctx["scope"] + (f" | Disaster: {disaster.disaster_type_name}" if disaster else ""))],
+        [_p("Generated", NOTE), _p(now)],
+    ], colWidths=[28 * mm, PAGE_W - 28 * mm])
+    meta.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.3, LINE),
+                              ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+
+    buf = io.BytesIO()
+    doc = BaseDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+                          topMargin=16 * mm, bottomMargin=20 * mm, title=f"GeoAid - {title}", author="GeoAid")
+    doc.addPageTemplates([PageTemplate(id="p", frames=[Frame(18 * mm, 20 * mm, PAGE_W, A4[1] - 36 * mm)])])
+
+    class Canvas(_NumberedCanvas):
+        footer_text = f"GeoAid | {title} | {ROLE_LABEL[role]}"
+
+    doc.build([head, Spacer(1, 6), meta] + story, canvasmaker=Canvas)
+    return buf.getvalue(), title
+
+
+# ------------------------------------------------------------------- views
+def _pdf_cors(resp):
+    resp["Access-Control-Allow-Origin"] = "*"
+    resp["Access-Control-Expose-Headers"] = "Content-Disposition"
+    return resp
+
+
+@csrf_exempt
+def report_pdf(request):
+    """
+    GET  /api/reports/pdf/?username=...
+         -> downloadable PDF built from live data for that user's role.
+    POST /api/reports/pdf/   {username, title, content, disaster_type_id}
+         -> same PDF, with the title and content typed in the Generate Report
+            form printed at the top. (A copy is kept in the Report table.)
+    """
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method not in ("GET", "POST"):
+        return _pdf_cors(JsonResponse({"success": False, "message": "GET or POST required."}, status=405))
+
+    written = None
+    disaster_id = None
+    fname_tag = ""
+
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body or "{}")
+        except ValueError:
+            return _pdf_cors(JsonResponse({"success": False, "message": "Invalid JSON."}, status=400))
+        username = data.get("username")
+        mobile = ""
+        title = (data.get("title") or "").strip()
+        content = (data.get("content") or "").strip()
+        if not title or not content:
+            return _pdf_cors(JsonResponse({"success": False,
+                "message": "Title and content are required."}, status=400))
+        did = str(data.get("disaster_type_id") or "").strip()
+        disaster_id = int(did) if did.isdigit() else None
+    else:
+        username = request.GET.get("username")
+        mobile = request.GET.get("mobile_number")
+        v = (request.GET.get("disaster_type_id") or "").strip()
+        disaster_id = int(v) if v.isdigit() else None
+
+    ctx, err = _resolve_requester(mobile, username)
+    if err:
+        return _pdf_cors(err)
+
+    if request.method == "POST":
+        disaster = DisasterType.objects.filter(pk=disaster_id).first() if disaster_id else None
+        Report.objects.create(user=ctx["user"], disaster_type=disaster,
+                              title=title[:200], content=content)
+        written = {
+            "title": title, "content": content,
+            "disaster": disaster.disaster_type_name if disaster else "",
+        }
+        fname_tag = "_" + re.sub(r"[^A-Za-z0-9]+", "_", title)[:40].strip("_")
+
+    pdf, _title = build_report_pdf(ctx, disaster_id, written)
+    fname = (f"GeoAid{fname_tag or '_' + ROLE_LABEL[ctx['role']].replace(' ', '_')}"
+             f"_Report_{timezone.localdate():%Y%m%d}.pdf")
+    resp = HttpResponse(pdf, content_type="application/pdf")
+    resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return _pdf_cors(resp)

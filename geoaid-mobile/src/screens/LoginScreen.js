@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import BrandMark from "../components/BrandMark";
@@ -81,6 +82,7 @@ function LoginScreen({ navigation, route }) {
 
   return (
     <MobileShell>
+      <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
         <BrandMark subtitle="Iligan City DRRM" />
 
@@ -158,11 +160,13 @@ function LoginScreen({ navigation, route }) {
           </Text>
         </TouchableOpacity>
       </ScrollView>
+      </SafeAreaView>
     </MobileShell>
   );
 }
 
 const styles = StyleSheet.create({
+  safe: { flex: 1 },
   screen: { padding: 20, paddingBottom: 40 },
   heading: { fontSize: 22, fontWeight: "700", textAlign: "center", marginTop: 12, color: "#0f172a" },
   subheading: { fontSize: 13, color: "#64748b", textAlign: "center", marginTop: 4, marginBottom: 20 },

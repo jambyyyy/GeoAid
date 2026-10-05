@@ -9,6 +9,7 @@ from .models import (
     DisasterType,
     Donation,
     EvacuationRoute,
+    VulnerabilityProfile,
 )
 
 
@@ -38,7 +39,7 @@ class HouseholdAdminForm(forms.ModelForm):
 class HouseholdAdmin(admin.ModelAdmin):
     form = HouseholdAdminForm
     list_display = ("household_code", "full_name", "mobile_number", "barangay", "registration_complete", "created_at")
-    list_filter = ("barangay", "dwelling_type", "is_four_ps", "registration_complete")
+    list_filter = ("barangay", "dwelling_type", "registration_complete")
     search_fields = ("household_code", "full_name", "mobile_number")
     readonly_fields = ("household_code", "password_hash", "created_at")
     inlines = [FamilyMemberInline]
@@ -100,3 +101,11 @@ class EvacuationRouteAdmin(admin.ModelAdmin):
     list_filter = ("road_condition", "route_status", "evacuation_center__barangay")
     search_fields = ("start_location", "evacuation_center__name")
     readonly_fields = ("created_at",)
+
+
+@admin.register(VulnerabilityProfile)
+class VulnerabilityProfileAdmin(admin.ModelAdmin):
+    list_display = ("household", "priority_level", "priority_score", "flags", "family_member", "disaster_type", "updated_at")
+    list_filter = ("priority_level", "disaster_type")
+    search_fields = ("household__household_code", "household__full_name")
+    readonly_fields = ("updated_at",)

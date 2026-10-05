@@ -71,6 +71,42 @@ class DisasterType(models.Model):
         return self.disaster_type_name
 
 
+class Report(models.Model):
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    )
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    )
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title
+
+
+# Shared priority formula used by the vulnerability profiles (stored in
+# VulnerabilityProfile.priority_score) and by every dashboard payload, so
+# the score is identical everywhere. PWD/Pregnant count double since they
+# usually need more direct assistance than the other groups.
+VULNERABILITY_WEIGHTS = {"PWD": 2, "Pregnant": 2, "Elderly": 1, "Child<5": 1}
+
+
+def priority_from_flags(flags):
+    """flags: iterable of "PWD"/"Pregnant"/"Elderly"/"Child<5".
+    Returns (priority_score, priority_level)."""
+    score = sum(VULNERABILITY_WEIGHTS.get(f, 0) for f in flags)
+    if score >= 3:
+        return score, "High"
+    if score >= 1:
+        return score, "Medium"
+    return score, "Low"
+
+
 class Household(models.Model):
     """A resident account created through the GeoAid Resident app's
     registration flow (Steps 1-4: Account, Household, Members,
@@ -166,9 +202,6 @@ class Household(models.Model):
     gps_lat = models.FloatField(null=True, blank=True)
     gps_lng = models.FloatField(null=True, blank=True)
 
-    # --- Step 4: Vulnerability Assessment (household-level) ---
-    is_four_ps = models.BooleanField(default=False)
-
     # Set once Steps 2-4 have all been submitted via register/complete/
     registration_complete = models.BooleanField(default=False)
 
@@ -183,6 +216,13 @@ class Household(models.Model):
         ("rejected", "Rejected"),
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
+
+    @property
+    def vulnerability(self):
+        """This household's current VulnerabilityProfile (highest score
+        first), or None if it hasn't been profiled yet. Use
+        household.vulnerability_profiles for every row."""
+        return self.vulnerability_profiles.order_by("-priority_score", "-updated_at").first()
 
     def set_password(self, raw_password):
         self.password_hash = make_password(raw_password)
@@ -250,6 +290,89 @@ class FamilyMember(models.Model):
 
     def __str__(self):
         return f"{self.full_name} ({self.relation} of {self.household.full_name})"
+
+
+class VulnerabilityProfile(models.Model):
+    """Matches the thesis ERD's vulnerability_profiling entity. One row
+    per household per disaster (disaster_type is NULL when no disaster is
+    active, i.e. a general profile). `family_member` is the member who
+    drives the household's priority (e.g. the PWD / pregnant member), kept
+    to match the ERD's family_members_id FK; it is NULL when the
+    household has no vulnerable member.
+
+    Rows are (re)computed by sync_vulnerability_profile() from the
+    FamilyMember flags (PWD, pregnant, 60+, under 5), so they never need to be
+    typed in by hand."""
+
+    LEVEL_CHOICES = [("High", "High"), ("Medium", "Medium"), ("Low", "Low")]
+
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="vulnerability_profiles"
+    )
+    family_member = models.ForeignKey(
+        FamilyMember, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="vulnerability_profiles",
+    )
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="vulnerability_profiles",
+    )
+    priority_score = models.PositiveIntegerField(default=0)
+    priority_level = models.CharField(max_length=6, choices=LEVEL_CHOICES, default="Low")
+    # Comma-separated snapshot of the flags behind the score, e.g. "PWD,Elderly".
+    flags = models.CharField(max_length=100, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority_score", "household_id"]
+
+    @property
+    def flag_list(self):
+        return [f for f in self.flags.split(",") if f]
+
+    def __str__(self):
+        return f"{self.household.household_code} - {self.priority_level} ({self.priority_score})"
+
+
+def sync_vulnerability_profile(household):
+    """Recompute and save the VulnerabilityProfile row(s) for a household:
+    one per currently active DisasterType, or a single general row
+    (disaster_type=None) when no disaster is active. Returns the rows."""
+
+    flags = set()
+    driver = None  # the member with the heaviest flags
+    driver_weight = 0
+    for m in household.family_members.all():
+        member_flags = set()
+        if m.is_pwd:
+            member_flags.add("PWD")
+        if m.is_pregnant:
+            member_flags.add("Pregnant")
+        if m.is_elderly:
+            member_flags.add("Elderly")
+        if m.is_child_under5:
+            member_flags.add("Child<5")
+        flags |= member_flags
+        w = sum(VULNERABILITY_WEIGHTS.get(f, 0) for f in member_flags)
+        if w > driver_weight:
+            driver, driver_weight = m, w
+
+    score, level = priority_from_flags(flags)
+    values = {
+        "family_member": driver,
+        "priority_score": score,
+        "priority_level": level,
+        "flags": ",".join(sorted(flags)),
+    }
+
+    targets = list(DisasterType.objects.filter(status="active")) or [None]
+    rows = []
+    for dt in targets:
+        row, _ = VulnerabilityProfile.objects.update_or_create(
+            household=household, disaster_type=dt, defaults=values
+        )
+        rows.append(row)
+    return rows
 
 
 class EvacuationCenter(models.Model):
@@ -387,7 +510,14 @@ class ReliefDistribution(GoodsLabelMixin, models.Model):
     claim_status), with one addition: goods_type, so a release is either
     "rice" or "pack" and can be matched back against ReliefStock. Creating
     one of these deducts quantity_given from the matching ReliefStock row
-    — see cswd_record_relief."""
+    — see cswd_record_relief.
+
+    Releases are now made PER BARANGAY (to the barangay's evacuation
+    center), not per household: `household` is therefore optional and
+    only set on older rows created before this change. New rows carry
+    `barangay` (+ optionally `evacuation_center`) and `households_served`,
+    a snapshot of how many households were in that evacuation center
+    (or, with no center, confirmed in that barangay) when it was recorded."""
 
     # Lifecycle: CSWD records a release (processing) -> marks it ready for
     # pickup (ready) -> the resident confirms in the mobile app that they
@@ -402,9 +532,23 @@ class ReliefDistribution(GoodsLabelMixin, models.Model):
         ("pending", "Pending"),
     ]
 
+    # Legacy per-household link — null for barangay-level releases.
     household = models.ForeignKey(
-        Household, on_delete=models.CASCADE, related_name="relief_records"
+        Household, on_delete=models.CASCADE, related_name="relief_records",
+        null=True, blank=True,
     )
+    # Barangay-level release target — ERD relief_distribution.barangay_id.
+    barangay = models.ForeignKey(
+        Barangay, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="relief_distributions",
+    )
+    evacuation_center = models.ForeignKey(
+        EvacuationCenter, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="relief_distributions",
+    )
+    # Households inside the evacuation center (or confirmed in the
+    # barangay when no center is chosen) at the time of release.
+    households_served = models.PositiveIntegerField(default=0)
     disaster_type = models.ForeignKey(
         DisasterType, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="relief_distributions"
@@ -431,7 +575,8 @@ class ReliefDistribution(GoodsLabelMixin, models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.household_id} — {self.goods_type} x{self.quantity_given}"
+        target = self.barangay.barangay_name if self.barangay_id else self.household_id
+        return f"{target} — {self.goods_type} x{self.quantity_given}"
 
 
 class EvacuationRoute(models.Model):
