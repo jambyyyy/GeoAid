@@ -37,6 +37,7 @@ from .views import (
     resident_profile,
     resident_profile_update,
     report_pdf,
+    resident_member_photo,
 )
 
 urlpatterns = [
@@ -78,7 +79,9 @@ urlpatterns = [
     path("resident/relief-distribution/confirm/", resident_confirm_relief),
     path("resident/profile/", resident_profile),
     path("resident/profile/update/", resident_profile_update),
-
+    path("resident/profile/member-photo/",resident_member_photo,
+    name="resident_member_photo",
+),
     # PDF report (all staff dashboards)
     path("reports/pdf/", report_pdf),
 ]

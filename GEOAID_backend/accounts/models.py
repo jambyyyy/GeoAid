@@ -51,6 +51,31 @@ class Purok(models.Model):
         verbose_name_plural = "Puroks"
         unique_together = ('barangay', 'purok_name')
 
+    @staticmethod
+    def options():
+        """{barangay_name: [purok names]} — the purok list used by the
+        resident registration dropdown and by Purok President scoping.
+        The Purok table (Django admin > Puroks) is the source of truth for
+        any barangay that has rows in it; barangays with no rows yet fall
+        back to Household.PUROK_CHOICES_BY_BARANGAY, so nothing breaks
+        before the table is filled (run `python manage.py seed_puroks`)."""
+        out = {}
+        for p in Purok.objects.select_related("barangay").order_by("purok_name"):
+            out.setdefault(p.barangay.barangay_name, []).append(p.purok_name)
+        for brgy, names in Household.PUROK_CHOICES_BY_BARANGAY.items():
+            out.setdefault(brgy, list(names))
+        return out
+
+    @staticmethod
+    def match(barangay_name, purok_name):
+        """The Purok row for a (barangay, purok) text pair, or None."""
+        if not barangay_name or not purok_name:
+            return None
+        return Purok.objects.filter(
+            barangay__barangay_name__iexact=barangay_name.strip(),
+            purok_name__iexact=purok_name.strip(),
+        ).first()
+
     def __str__(self):
         return f"{self.purok_name} - {self.barangay.barangay_name}"
 
@@ -233,6 +258,9 @@ class Household(models.Model):
     def save(self, *args, **kwargs):
         if not self.household_code:
             self.household_code = self._generate_unique_code()
+        # Keep the purok_fk link in step with the barangay/purok text the
+        # resident picked (None when the name isn't in the Purok table).
+        self.purok_fk = Purok.match(self.barangay, self.purok)
         super().save(*args, **kwargs)
 
     @staticmethod
@@ -267,18 +295,46 @@ class FamilyMember(models.Model):
         on_delete=models.CASCADE,
         related_name="family_members",
     )
+
     full_name = models.CharField(max_length=150)
+
     age = models.PositiveIntegerField()
-    relation = models.CharField(max_length=20, choices=RELATION_CHOICES, default="Other")
 
-    # Vulnerability flags (Step 4)
+    relation = models.CharField(
+        max_length=20,
+        choices=RELATION_CHOICES,
+        default="Other",
+    )
+
+    # Optional profile picture
+    image = models.ImageField(
+        upload_to="family_members/",
+        blank=True,
+        null=True,
+    )
+
     is_pwd = models.BooleanField(default=False)
-    pwd_detail = models.CharField(max_length=255, blank=True)
-    is_pregnant = models.BooleanField(default=False)
-    pregnant_detail = models.CharField(max_length=255, blank=True)
 
-    # Used for evacuation-center QR check-in/out (Home screen "My QR Code")
-    qr_code = models.CharField(max_length=255, unique=True, blank=True, null=True)
+    pwd_detail = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    is_pregnant = models.BooleanField(
+        default=False
+    )
+
+    pregnant_detail = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    qr_code = models.CharField(
+        max_length=255,
+        unique=True,
+        blank=True,
+        null=True,
+    )
 
     @property
     def is_elderly(self):
@@ -289,8 +345,11 @@ class FamilyMember(models.Model):
         return self.age < 5
 
     def __str__(self):
-        return f"{self.full_name} ({self.relation} of {self.household.full_name})"
-
+        return (
+            f"{self.full_name} "
+            f"({self.relation} of "
+            f"{self.household.full_name})"
+        )
 
 class VulnerabilityProfile(models.Model):
     """Matches the thesis ERD's vulnerability_profiling entity. One row

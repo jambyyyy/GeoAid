@@ -1,30 +1,74 @@
-import { SafeAreaView, StyleSheet, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 
-// On the web this wrapped screens in a fixed-width "phone frame" div for
-// desktop preview. On an actual phone that's unnecessary — the whole
-// screen already *is* the phone frame — so this just handles safe-area
-// insets and keyboard avoidance.
-function MobileShell({ children }) {
+
+function MobileShell({
+  children,
+}) {
   return (
-    <SafeAreaView style={styles.shell}>
+    <View style={styles.shell}>
+
       <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.keyboardView}
+
+        behavior={
+          Platform.OS === "ios"
+            ? "padding"
+            : undefined
+        }
+
+        keyboardVerticalOffset={0}
       >
-        {children}
+
+        <View style={styles.content}>
+          {children}
+        </View>
+
       </KeyboardAvoidingView>
-    </SafeAreaView>
+
+    </View>
   );
 }
 
+
 const styles = StyleSheet.create({
+
   shell: {
     flex: 1,
+
+    width: "100%",
+
+    minWidth: 0,
+    minHeight: 0,
+
     backgroundColor: "#f5f7fa",
   },
-  flex: {
+
+
+  keyboardView: {
     flex: 1,
+
+    width: "100%",
+
+    minWidth: 0,
+    minHeight: 0,
   },
+
+
+  content: {
+    flex: 1,
+
+    width: "100%",
+
+    minWidth: 0,
+    minHeight: 0,
+  },
+
 });
+
 
 export default MobileShell;

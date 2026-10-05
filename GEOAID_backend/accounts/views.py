@@ -14,7 +14,7 @@ from .models import (
     Household, FamilyMember, EvacuationCenter, Attendance, Donation, Barangay,
     EvacuationRoute, ReliefStock, ReliefDistribution,
     goods_label, GOODS_TYPES, DisasterType, Report,
-    VulnerabilityProfile, sync_vulnerability_profile, priority_from_flags,
+    VulnerabilityProfile, sync_vulnerability_profile, priority_from_flags, Purok,
 )
 from . import routing
 import re
@@ -129,7 +129,7 @@ def _purok_for_username(username, barangay=None):
     if not last_name:
         return ""
 
-    for purok in Household.PUROK_CHOICES_BY_BARANGAY.get(barangay, []):
+    for purok in Purok.options().get(barangay, []):
         if purok.strip().lower() == last_name:
             return purok
     return ""
@@ -2797,8 +2797,22 @@ def purok_dashboard(request):
             "members": member_payload,
         })
 
+    # Route info for this purok from the Purok table (Django admin > Puroks).
+    purok_row = Purok.match(valid_barangay, effective_purok) if effective_purok else None
+    purok_info = None
+    if purok_row:
+        purok_info = {
+            "name": purok_row.purok_name,
+            "route_description": purok_row.route_description,
+            "route_distance": purok_row.route_distance,
+            "estimated_time": purok_row.estimated_time,
+            "latitude": purok_row.latitude,
+            "longitude": purok_row.longitude,
+        }
+
     data = {
         "purok": effective_purok or "All Puroks",
+        "purok_info": purok_info,
         "barangay": valid_barangay,
         # TODO: replace with a real Advisory/Disaster model.
         "flood_advisory": False,
@@ -3106,7 +3120,7 @@ def register_lookups(request):
 
     return JsonResponse({
         "barangays": list(Barangay.objects.order_by("barangay_name").values_list("barangay_name", flat=True)),
-        "puroks": Household.PUROK_CHOICES_BY_BARANGAY,
+        "puroks": Purok.options(),
         "dwelling_types": [
             {"value": value, "label": label}
             for value, label in Household.DWELLING_TYPE_CHOICES
@@ -3370,40 +3384,85 @@ def resident_confirm_relief(request):
         },
     })
 
+def _serialize_profile(household, request=None):
+    """Serialize resident profile data for ProfileScreen."""
 
-def _serialize_profile(household):
-    """Shape ProfileScreen.js reads: household info, contact info, and
-    the household's members with vulnerability flags."""
     members = []
-    for m in household.family_members.all():
+
+    for member in household.family_members.all():
+
         flags = []
-        if m.is_pwd:
+
+        if member.is_pwd:
             flags.append("PWD")
-        if m.is_pregnant:
+
+        if member.is_pregnant:
             flags.append("Pregnant")
-        if m.is_elderly:
+
+        if member.is_elderly:
             flags.append("Elderly")
-        if m.is_child_under5:
+
+        if member.is_child_under5:
             flags.append("Child<5")
+
+        image_url = None
+
+        if member.image:
+            try:
+                image_url = member.image.url
+
+                if request is not None:
+                    image_url = request.build_absolute_uri(
+                        image_url
+                    )
+
+            except Exception:
+                image_url = None
+
         members.append({
-            "full_name": m.full_name,
-            "relation": "Head of Household" if m.relation == "Head" else m.relation,
-            "age": m.age,
+            "id": member.id,
+            "full_name": member.full_name,
+
+            "relation":
+                "Head of Household"
+                if member.relation == "Head"
+                else member.relation,
+
+            "age": member.age,
+
             "flags": flags,
+
+            "image": image_url,
         })
 
     return {
-        "household_code": household.household_code,
-        "barangay": household.barangay,
-        "purok": household.purok,
-        "status": household.status,
-        "full_name": household.full_name,
-        "mobile_number": household.mobile_number,
-        "address_line": household.address_line,
-        "landmark": household.landmark,
-        "members": members,
-    }
+        "household_code":
+            household.household_code,
 
+        "barangay":
+            household.barangay,
+
+        "purok":
+            household.purok,
+
+        "status":
+            household.status,
+
+        "full_name":
+            household.full_name,
+
+        "mobile_number":
+            household.mobile_number,
+
+        "address_line":
+            household.address_line,
+
+        "landmark":
+            household.landmark,
+
+        "members":
+            members,
+    }
 
 @csrf_exempt
 def resident_profile(request):
@@ -3426,7 +3485,12 @@ def resident_profile(request):
     if not household:
         return JsonResponse({"success": False, "message": "Household not found."}, status=404)
 
-    return JsonResponse(_serialize_profile(household))
+    return JsonResponse(
+    _serialize_profile(
+        household,
+        request=request
+    )
+)
 
 
 @csrf_exempt
@@ -3470,7 +3534,12 @@ def resident_profile_update(request):
             setattr(household, field, value)
 
     household.save()
-    return JsonResponse(_serialize_profile(household))
+    return JsonResponse(
+    _serialize_profile(
+        household,
+        request=request
+    )
+)
 
 
 # =====================================================================
@@ -3536,7 +3605,183 @@ def _kpis(pairs):
 def _section(title, *flowables):
     return [KeepTogether([Paragraph(escape(title), H1)] + list(flowables[:1]))] + list(flowables[1:])
 
+@csrf_exempt
+def resident_member_photo(request):
+    """
+    Upload or replace the profile picture of a household member.
+    """
 
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+
+    if request.method != "POST":
+        return JsonResponse(
+            {
+                "success": False,
+                "message": "POST request required.",
+            },
+            status=405,
+        )
+
+    try:
+        mobile_number = (
+            request.POST.get("mobile_number") or ""
+        ).strip()
+
+        member_id = (
+            request.POST.get("member_id") or ""
+        ).strip()
+
+        image = request.FILES.get("image")
+
+        # ----------------------------------------------
+        # VALIDATION
+        # ----------------------------------------------
+
+        if not mobile_number:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "mobile_number is required.",
+                },
+                status=400,
+            )
+
+        if not member_id:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "member_id is required.",
+                },
+                status=400,
+            )
+
+        if not image:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "Please select an image.",
+                },
+                status=400,
+            )
+
+        # Limit image to 5 MB
+        if image.size > 5 * 1024 * 1024:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "Image must be 5 MB or smaller.",
+                },
+                status=400,
+            )
+
+        allowed_content_types = [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+        ]
+
+        if (
+            image.content_type
+            and image.content_type
+            not in allowed_content_types
+        ):
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message":
+                        "Only JPG, PNG, and WEBP images are allowed.",
+                },
+                status=400,
+            )
+
+        # ----------------------------------------------
+        # FIND HOUSEHOLD
+        # ----------------------------------------------
+
+        try:
+            household = Household.objects.get(
+                mobile_number=mobile_number
+            )
+
+        except Household.DoesNotExist:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "Household not found.",
+                },
+                status=404,
+            )
+
+        # ----------------------------------------------
+        # FIND MEMBER
+        #
+        # Important:
+        # Restrict the query to the resident's household
+        # so they cannot change another household's image.
+        # ----------------------------------------------
+
+        try:
+            member = FamilyMember.objects.get(
+                id=member_id,
+                household=household,
+            )
+
+        except FamilyMember.DoesNotExist:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "message": "Family member not found.",
+                },
+                status=404,
+            )
+
+        # ----------------------------------------------
+        # DELETE PREVIOUS PHOTO
+        # ----------------------------------------------
+
+        if member.image:
+            try:
+                member.image.delete(save=False)
+            except Exception:
+                pass
+
+        # ----------------------------------------------
+        # SAVE NEW PHOTO
+        # ----------------------------------------------
+
+        member.image = image
+
+        member.save(
+            update_fields=["image"]
+        )
+
+        image_url = None
+
+        if member.image:
+            image_url = request.build_absolute_uri(
+                member.image.url
+            )
+
+        return JsonResponse(
+            {
+                "success": True,
+                "message":
+                    "Profile photo updated successfully.",
+                "member_id": member.id,
+                "image": image_url,
+            }
+        )
+
+    except Exception as e:
+        return JsonResponse(
+            {
+                "success": False,
+                "message": str(e),
+            },
+            status=500,
+        )
 class _NumberedCanvas(rl_canvas.Canvas):
     """Adds 'Page x of y' and the footer to every page."""
     footer_text = "GeoAid"

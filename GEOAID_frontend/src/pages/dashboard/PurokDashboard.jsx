@@ -515,6 +515,29 @@ function PurokDashboard() {
               </article>
 
               <article className="panel">
+                <h2>Purok Route to Evacuation</h2>
+                {dashboardData?.purok_info &&
+                (dashboardData.purok_info.route_description ||
+                  dashboardData.purok_info.route_distance ||
+                  dashboardData.purok_info.estimated_time) ? (
+                  <>
+                    {dashboardData.purok_info.route_description && (
+                      <p className="panel-note">{dashboardData.purok_info.route_description}</p>
+                    )}
+                    <p className="panel-note">
+                      Distance: {dashboardData.purok_info.route_distance || "—"} · Estimated time:{" "}
+                      {dashboardData.purok_info.estimated_time || "—"}
+                    </p>
+                  </>
+                ) : (
+                  <p className="panel-note">
+                    No route has been set for {dashboardData?.purok || "this purok"} yet. It can be added
+                    in the admin site under Puroks.
+                  </p>
+                )}
+              </article>
+
+              <article className="panel">
                 <h2>Quick Actions</h2>
                 <div className="action-grid">
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Household Registration")}>
