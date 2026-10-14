@@ -802,3 +802,27 @@
     background: #f8fafc;
     border: 1px solid #e2e8f0;
 }
+/* Barangay: use full-width operational panels and avoid half-empty grid rows. */
+.dashboard-page, .dashboard-page * { box-sizing: border-box; }
+.dashboard-main { width: 100%; min-width: 0; }
+.dashboard-main > section, .panel, .table-scroll { min-width: 0; }
+.barangay-relief-tab { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.barangay-relief-tab > .panel { grid-column: 1 / -1; }
+.barangay-relief-tab .stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr)); gap: 12px; margin: 12px 0 0; }
+.barangay-relief-tab .stat-card { min-width: 0; padding: 14px; }
+.barangay-relief-tab .donation-form { max-width: 980px; }
+.donation-form .panel-note, .donation-form-error { grid-column: 1 / -1; }
+.donation-form-field { min-width: 0; }
+.donation-form-field input, .donation-form-field select, .donation-form-field textarea { width: 100%; min-width: 0; }
+.data-table { width: 100%; }
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.stock-availability-note { font-size: 12px; color: #475569; margin: 5px 0 9px; grid-column: 1 / -1; }
+.stock-availability-note strong { color: #1d4ed8; }
+@media (max-width: 768px) {
+  .dashboard-main { padding: 16px; }
+  .dashboard-header { gap: 12px; }
+  .header-actions { flex-wrap: wrap; }
+  .donation-form { grid-template-columns: minmax(0, 1fr); }
+  .content-grid { grid-template-columns: minmax(0, 1fr); }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); }
+}

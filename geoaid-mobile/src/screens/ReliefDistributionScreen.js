@@ -1,5 +1,6 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator, Platform } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, RefreshControl, Alert, ActivityIndicator, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
@@ -11,16 +12,20 @@ function ReliefDistributionScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
 
   const [confirmingId, setConfirmingId] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const fetchReliefData = async () => {
     const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
 
     if (!mobileNumber) {
+      setLoadError("Please sign in to view your household's relief records.");
       setLoading(false);
       return;
     }
 
     try {
+      setLoadError("");
       const response = await fetch(
         `${API_BASE}/api/resident/relief-distribution/?mobile_number=${encodeURIComponent(mobileNumber)}`
       );
@@ -28,9 +33,12 @@ function ReliefDistributionScreen({ navigation }) {
       if (response.ok) {
         const data = await response.json();
         setReliefData(data);
+      } else {
+        setLoadError("Relief records could not be loaded. Please try again.");
       }
     } catch (err) {
       console.error("Failed to fetch relief distribution data:", err);
+      setLoadError("Check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -39,6 +47,16 @@ function ReliefDistributionScreen({ navigation }) {
   useEffect(() => {
     fetchReliefData();
   }, []);
+
+  const refreshRelief = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await fetchReliefData();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Alert.alert's buttons don't work on react-native-web, so use
   // window.confirm / window.alert there and Alert on iOS/Android.
@@ -105,8 +123,18 @@ function ReliefDistributionScreen({ navigation }) {
     ready: "Your relief is ready. Once you receive it, tap Confirm Received below.",
     processing: "CSWD is preparing your relief goods. You can confirm receipt once it is Ready for Pickup.",
     pending: "Waiting for relief to be allocated to your household.",
-    not_eligible: "Complete your household registration to become eligible for relief distribution.",
+    not_eligible: "Your household registration must be confirmed before relief can be allocated.",
   };
+  const NEXT_ACTION = {
+    received: "Already received. No confirmation is needed for this completed record.",
+    ready: "Collect the allocated goods from Barangay staff. Tap Confirm Received only AFTER the goods are physically handed to you.",
+    processing: "Barangay staff are preparing your allocation. You do not need to confirm anything yet.",
+    pending: "There is no active allocation yet. Check back for updates from your Barangay.",
+    not_eligible: "Check your registration status before expecting an allocation.",
+  };
+  const currentStage = reliefData?.status === "received" ? 3
+    : reliefData?.status === "ready" ? 2
+    : reliefData?.status === "processing" ? 1 : 0;
   const HISTORY_LABEL = {
     claimed: "Received",
     ready: "Ready for Pickup",
@@ -136,9 +164,15 @@ function ReliefDistributionScreen({ navigation }) {
             <BackIcon />
           </TouchableOpacity>
           <Text style={styles.title}>Relief Distribution</Text>
+          <TouchableOpacity onPress={refreshRelief} style={styles.refreshButton}
+            disabled={refreshing} accessibilityRole="button" accessibilityLabel="Refresh relief status">
+            {refreshing ? <ActivityIndicator color="#2563eb" size="small" /> : <Text style={styles.refreshText}>Refresh</Text>}
+          </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={refreshRelief} tintColor="#2563eb" />
+        }>
           {reliefData ? (
             <>
               <View style={styles.statusCard}>
@@ -157,7 +191,29 @@ function ReliefDistributionScreen({ navigation }) {
                 <Text style={styles.statusDescription}>
                   {STATUS_DESC[reliefData.status] || ""}
                 </Text>
+                <View style={styles.nextAction}>
+                  <Text style={styles.nextActionTitle}>What should I do?</Text>
+                  <Text style={styles.nextActionText}>{NEXT_ACTION[reliefData.status] || "Ask your Barangay for an update."}</Text>
+                </View>
               </View>
+
+              {reliefData.status !== "not_eligible" && (
+                <View style={styles.progressCard}>
+                  <Text style={styles.sectionLabel}>Relief progress</Text>
+                  <View style={styles.progressRow}>
+                    {["Processing", "Ready for Pickup", "Received"].map((name, index) => (
+                      <View key={name} style={styles.progressItem}>
+                        <View style={[styles.progressDot, currentStage > index && styles.progressDotDone]}>
+                          <Text style={[styles.progressNumber, currentStage > index && styles.progressNumberDone]}>
+                            {currentStage > index ? "✓" : index + 1}
+                          </Text>
+                        </View>
+                        <Text style={styles.progressLabel}>{name}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
 
               {reliefData.last_distribution && (
                 <View style={styles.section}>
@@ -168,7 +224,7 @@ function ReliefDistributionScreen({ navigation }) {
                         <CheckIcon color="#15803d" />
                       </View>
                       <View style={styles.distributionInfo}>
-                        <Text style={styles.distributionTitle}>Relief Package Received</Text>
+                        <Text style={styles.distributionTitle}>Latest Relief Allocation</Text>
                         <Text style={styles.distributionDate}>{reliefData.last_distribution.date}</Text>
                       </View>
                     </View>
@@ -232,7 +288,7 @@ function ReliefDistributionScreen({ navigation }) {
                             {confirmingId === item.id ? (
                               <ActivityIndicator color="#fff" />
                             ) : (
-                              <Text style={styles.confirmBtnText}>Confirm Received</Text>
+                              <Text style={styles.confirmBtnText}>I Have Received These Goods</Text>
                             )}
                           </TouchableOpacity>
                         )}
@@ -254,13 +310,17 @@ function ReliefDistributionScreen({ navigation }) {
 
               <View style={styles.infoNote}>
                 <Text style={styles.infoNoteText}>
-                  Relief distribution is based on your household's vulnerability priority and registration status. Contact your Purok President for more information.
+                  Relief is allocated by Barangay staff based on eligibility and need. For pending allocations, contact your Barangay or Purok representative.
                 </Text>
               </View>
             </>
           ) : (
             <View style={styles.emptyState}>
               <Text style={styles.emptyText}>Unable to load relief distribution data</Text>
+              <Text style={styles.emptySubtext}>{loadError || "Check your connection and try again."}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={refreshRelief} disabled={refreshing}>
+                <Text style={styles.retryText}>Try Again</Text>
+              </TouchableOpacity>
             </View>
           )}
         </ScrollView>
@@ -269,7 +329,26 @@ function ReliefDistributionScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
+  refreshButton: { minWidth: 70, minHeight: 42, backgroundColor: "#eff6ff",
+    borderRadius: 10, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
+  refreshText: { color: "#1d4ed8", fontWeight: "700", fontSize: 13 },
+  nextAction: { backgroundColor: "#eff6ff", borderRadius: 10, padding: 12, gap: 4 },
+  nextActionTitle: { fontSize: 14, color: "#1e40af", fontWeight: "700" },
+  nextActionText: { fontSize: 14, color: "#1e3a8a", lineHeight: 21 },
+  progressCard: { borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 14,
+    backgroundColor: "#fff", padding: 14 },
+  progressRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  progressItem: { flex: 1, alignItems: "center", gap: 6, minWidth: 0 },
+  progressDot: { width: 30, height: 30, borderRadius: 15, borderWidth: 2,
+    borderColor: "#cbd5e1", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
+  progressDotDone: { backgroundColor: "#15803d", borderColor: "#15803d" },
+  progressNumber: { color: "#64748b", fontSize: 13, fontWeight: "700" },
+  progressNumberDone: { color: "#fff" },
+  progressLabel: { fontSize: 12, color: "#526176", textAlign: "center", lineHeight: 17 },
+  retryButton: { marginTop: 6, paddingHorizontal: 24, minHeight: 46, borderRadius: 10,
+    backgroundColor: "#2563eb", justifyContent: "center", alignItems: "center" },
+  retryText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   header: {
@@ -396,6 +475,6 @@ const styles = StyleSheet.create({
     borderColor: "#fed7aa",
   },
   infoNoteText: { fontSize: 12, color: "#9a3412", textAlign: "center", lineHeight: 16 },
-});
+}, "relief"));
 
 export default ReliefDistributionScreen;

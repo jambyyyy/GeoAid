@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
 import {
   View,
@@ -108,10 +109,10 @@ function LoginScreen({ navigation, route }) {
             <Text style={styles.mobilePrefix}>+63</Text>
             <TextInput
               style={styles.mobileInput}
-              placeholder="917 234 5678"
+              placeholder="9172345678"
               keyboardType="phone-pad"
               value={mobile}
-              onChangeText={setMobile}
+              onChangeText={(value) => setMobile(value.replace(/\D/g, "").replace(/^63(?=9)/, "").replace(/^0(?=9)/, "").slice(0, 10))}
               editable={!isSubmitting}
             />
           </View>
@@ -135,9 +136,9 @@ function LoginScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={styles.forgotRow}>
-            <Text style={styles.forgotLink}>Forgot password?</Text>
-          </TouchableOpacity>
+          <View style={styles.forgotRow}>
+            <Text style={styles.forgotHelp}>Need login help? Contact your Barangay staff.</Text>
+          </View>
 
           <TouchableOpacity
             style={[styles.signinBtn, isSubmitting && styles.btnDisabled]}
@@ -165,7 +166,7 @@ function LoginScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   safe: { flex: 1 },
   screen: { padding: 20, paddingBottom: 40 },
   heading: { fontSize: 22, fontWeight: "700", textAlign: "center", marginTop: 12, color: "#0f172a" },
@@ -201,6 +202,7 @@ const styles = StyleSheet.create({
   eyeToggle: { padding: 4 },
   forgotRow: { alignItems: "flex-end", marginTop: 8 },
   forgotLink: { fontSize: 13, color: "#2563eb" },
+  forgotHelp: { fontSize: 13, lineHeight: 19, color: "#64748b", textAlign: "right" },
   signinBtn: {
     backgroundColor: "#2563eb",
     borderRadius: 10,
@@ -213,6 +215,6 @@ const styles = StyleSheet.create({
   footerRow: { marginTop: 24, alignItems: "center" },
   footerText: { fontSize: 13, color: "#64748b" },
   footerLink: { color: "#2563eb", fontWeight: "600" },
-});
+}, "login"));
 
 export default LoginScreen;

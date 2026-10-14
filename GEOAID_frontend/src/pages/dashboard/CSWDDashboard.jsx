@@ -4,6 +4,8 @@ import "./CSWDDashboard.css";
 import Sidebar from "../../components/sidebar";
 import { Paginated } from "../../components/Pagination";
 import { API_URL } from "../../config";
+import CashFunds, { FinanceUnlockPanel } from "./CashFunds";
+import { financeFetch, getFinanceToken, clearFinanceToken, FinanceAuthRequired } from "./financeAuth";
 
 // Remembers the selected page/tab in sessionStorage so a browser refresh
 // keeps you where you were instead of jumping back to "Dashboard". The
@@ -33,6 +35,7 @@ function usePersistedChoice(key, fallback, isValid) {
 const navItems = [
   "Dashboard",
   "Relief Distribution",
+  "Inventory",
   "Vulnerability Profiles",
   "Households",
   "Evacuation Centers",
@@ -51,6 +54,7 @@ const FLAG_CLASS = {
 const sectionInfo = {
   "Dashboard": { title: "CSWD Dashboard", subtitle: "City Social Welfare & Development — Relief & Beneficiary Operations" },
   "Relief Distribution": { title: "Relief Distribution", subtitle: "Release relief goods to each barangay's evacuation center and see how many households are inside" },
+  "Inventory": { title: "Inventory", subtitle: "Everything in storage with its unit — add new items and restock" },
   "Households": { title: "Households", subtitle: "Registered households under CSWD monitoring" },
   "Vulnerability Profiles": { title: "Vulnerability Profiles", subtitle: "Senior citizens, PWD, pregnant women, and children under 5 — ranked by priority level" },
   "Evacuation Centers": { title: "Evacuation Centers", subtitle: "Monitor occupancy across active evacuation sites" },
@@ -72,9 +76,37 @@ const RELIEF_STATUS_OPTIONS = [
 
 function ReliefStatusBadge({ value, label }) {
   const key = String(value || "").toLowerCase();
-  const text = label || RELIEF_STATUS_OPTIONS.find((o) => o.value === key)?.label || value;
+  const text = key === "claimed" ? "Received" : (label || RELIEF_STATUS_OPTIONS.find((o) => o.value === key)?.label || value);
   return <span className={`status-badge status-${key}`}>{text}</span>;
 }
+
+// Packs CSWD can build from individual inventory items (Relief Distribution > Pack Builder).
+const PACK_TYPE_OPTIONS = [
+  { value: "rice pack", label: "Rice Pack" },
+  { value: "food pack", label: "Food Pack" },
+  { value: "medicine pack", label: "Medicine Pack" },
+  { value: "water pack", label: "Water Pack" },
+];
+const PACK_TYPES = PACK_TYPE_OPTIONS.map((o) => o.value);
+// Backward compatibility: older canned-goods inventory categories count as Food Pack.
+const asCurrentPack = (value) => value === "canned goods pack" ? "food pack" : value;
+
+// Suggests the pack an item is good for from its name (CSWD can still change it).
+// Canned goods (sardines, corned beef, etc.) are ingredients for Food Pack, not a separate pack.
+const suggestPack = (name) => {
+  const n = (name || "").trim().toLowerCase();
+  if (!n) return "";
+  const has = (words) => words.some((w) => n.includes(w));
+  if (n === "rice" || n.startsWith("rice ")) return "rice pack";
+  if (has(["sardine", "corned beef", "beef loaf", "meat loaf", "meatloaf", "tuna", "mackerel", "canned", "vienna", "luncheon", "spam", "liver spread", "pork and beans", "bangus", "century", "argentina", "555", "ligo"])) return "food pack";
+  if (has(["medicine", "paracetamol", "biogesic", "tablet", "capsule", "syrup", "vitamin", "antibiotic", "amoxicillin", "bandage", "first aid", "alcohol", "mask", "oresol", "betadine", "gauze", "povidone"])) return "medicine pack";
+  if (n.includes("water")) return "water pack";
+  if (has(["noodle", "canton", "pancit", "instant", "biscuit", "cracker", "coffee", "sugar", "salt", "cooking oil", "milk", "cereal", "oat", "bread", "egg", "soy sauce", "vinegar", "cup"])) return "food pack";
+  return "";
+};
+const RICE_MAX_PER_PACK = 10; // kg of rice allowed in one pack
+const validPositiveWhole = (value) => /^\d+$/.test(String(value).trim()) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
+
 
 const PRIORITY_CLASS = {
   High: "priority-high",
@@ -102,10 +134,17 @@ function CSWDDashboard() {
   const [donationPage, setDonationPage] = useState(1);
   const [expandedDonation, setExpandedDonation] = useState(null);
   const DONATIONS_PER_PAGE = 5;
+  // Donations tab: "goods" (original form + records) or "cash" (cash donations, purchases, ledger).
+  const [donationView, setDonationView] = useState("goods");
+  const [unlockForReceive, setUnlockForReceive] = useState(null); // donation id waiting for password confirmation
+  const [receivingId, setReceivingId] = useState(null);
+  const [receiveError, setReceiveError] = useState("");
   const [donationForm, setDonationForm] = useState({
     donor_name: "",
     contact_num: "",
     goods_type: "",
+    good_for: "",
+    unit: "pcs",
     quantity: "",
     donation_date: "",
     status: "pending",
@@ -130,10 +169,26 @@ function CSWDDashboard() {
   const [expandedBarangay, setExpandedBarangay] = useState(null);
   const [expandedCenter, setExpandedCenter] = useState(null);
 
-  const [stockForm, setStockForm] = useState({ goods_type: "", quantity: "" });
-  const [isSubmittingStock, setIsSubmittingStock] = useState(false);
-  const [stockFormError, setStockFormError] = useState("");
-  const [stockFormSuccess, setStockFormSuccess] = useState("");
+  const [itemForm, setItemForm] = useState({ name: "", unit: "", good_for: "", quantity: "" });
+  const [isSubmittingItem, setIsSubmittingItem] = useState(false);
+  const [itemFormError, setItemFormError] = useState("");
+  const [itemFormSuccess, setItemFormSuccess] = useState("");
+
+  // Manual packing: CSWD adds inventory items to a pack with the + buttons.
+  // Stock history filters (Inventory tab)
+  const [historyDir, setHistoryDir] = useState("all");
+  const [historyItem, setHistoryItem] = useState("all");
+
+  const [manualType, setManualType] = useState("food pack");
+  const [onlyForPack, setOnlyForPack] = useState(true);
+  const [manualPacks, setManualPacks] = useState("1");
+  const [manualRows, setManualRows] = useState([]); // [{ item_id, quantity_per_pack }]
+  // Keep an empty per-pack input editable until the operator enters a new number.
+  const [manualEmptyInputs, setManualEmptyInputs] = useState([]);
+  const [manualError, setManualError] = useState("");
+  const [manualSuccess, setManualSuccess] = useState("");
+  const [isManualPacking, setIsManualPacking] = useState(false);
+
 
   const [reportForm, setReportForm] = useState({
     title: "",
@@ -143,19 +198,23 @@ function CSWDDashboard() {
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportFormError, setReportFormError] = useState("");
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async ({ silent = false } = {}) => {
     try {
       const response = await fetch(
         `${API_URL}/api/cswd/dashboard/`
       );
 
       const data = await response.json();
-
+      if (!response.ok) throw new Error(data.message || "Could not load CSWD dashboard.");
+      setError("");
       setDashboardData(data);
       setDonationRecords(data.donation_records || []);
+      return true;
     } catch (err) {
       console.error(err);
-      setError("Failed to load dashboard data.");
+      // Do not erase a working dashboard if a background refresh fails.
+      if (!silent) setError("Failed to load dashboard data.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -165,16 +224,30 @@ function CSWDDashboard() {
     fetchDashboard();
   }, []);
 
+  useEffect(() => {
+    if (!["Relief Distribution", "Inventory", "Donations"].includes(activeItem)) return;
+    const timer = window.setInterval(() => { fetchDashboard({ silent: true }); }, 30000);
+    return () => window.clearInterval(timer);
+  }, [activeItem]);
+
   const handleLogout = () => {
     sessionStorage.removeItem("geoaid_user");
     sessionStorage.removeItem("geoaid_role");
     sessionStorage.removeItem("geoaid_cswd_page");
+    clearFinanceToken();
     navigate("/");
   };
 
   const handleDonationFieldChange = (field, value) => {
     setDonationFormSuccess("");
-    setDonationForm((prev) => ({ ...prev, [field]: value }));
+    setDonationForm((prev) => {
+      const next = { ...prev, [field]: value };
+      // Suggest a pack from the item name until CSWD picks one themselves.
+      if (field === "goods_type" && (prev.good_for === "" || prev.good_for === suggestPack(prev.goods_type))) {
+        next.good_for = suggestPack(value);
+      }
+      return next;
+    });
   };
 
   const handleAddDonation = async (e) => {
@@ -182,8 +255,18 @@ function CSWDDashboard() {
     setDonationFormError("");
     setDonationFormSuccess("");
 
-    if (!donationForm.donor_name.trim() || !donationForm.goods_type.trim() || !donationForm.quantity) {
-      setDonationFormError("Donor name, goods type, and quantity are required.");
+    if (!donationForm.donor_name.trim() || !donationForm.goods_type.trim() ||
+        !validPositiveWhole(donationForm.quantity) || !donationForm.unit || !donationForm.donation_date) {
+      setDonationFormError("Complete donor name, item, unit, quantity (at least 1), and donation date.");
+      return;
+    }
+
+    // An item that is already in the inventory keeps its own unit and "good for" pack.
+    const existingItem = inventory.find(
+      (i) => !i.is_pack && i.label.toLowerCase() === donationForm.goods_type.trim().toLowerCase()
+    );
+    if (!existingItem && !donationForm.good_for) {
+      setDonationFormError("Choose which pack this item is good for.");
       return;
     }
 
@@ -192,7 +275,12 @@ function CSWDDashboard() {
       const response = await fetch(`${API_URL}/api/cswd/donations/add/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...donationForm, username }),
+        body: JSON.stringify({
+          ...donationForm,
+          unit: existingItem ? existingItem.unit : donationForm.unit,
+          good_for: existingItem && existingItem.good_for ? existingItem.good_for : donationForm.good_for,
+          username,
+        }),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -203,17 +291,21 @@ function CSWDDashboard() {
       }
 
       // Refetch so donation records and storage stock reflect the new donation.
-      await fetchDashboard();
+      await fetchDashboard({ silent: true });
       setDonationPage(1);
       setDonationFormSuccess(
         data.stored_in_inventory && data.stock
-          ? `Donation logged. ${data.donation.quantity} added to ${data.stock.label} storage — now ${data.stock.quantity} in storage.`
-          : "Donation logged (not added to storage because it is marked Distributed or has no quantity)."
+          ? `Donation logged. ${data.donation.quantity} ${data.stock.unit} added to ${data.stock.label} storage — now ${data.stock.quantity} ${data.stock.unit} in storage.`
+          : donationForm.status === "pending"
+            ? "Donation logged as Pending. It is added to storage once you mark it Received."
+            : "Donation logged (not added to storage because it is marked Distributed or has no quantity)."
       );
       setDonationForm({
         donor_name: "",
         contact_num: "",
         goods_type: "",
+        good_for: "",
+        unit: "pcs",
         quantity: "",
         donation_date: "",
         status: "pending",
@@ -227,23 +319,64 @@ function CSWDDashboard() {
     }
   };
 
+  // Pending -> Received: the server adds the goods to Inventory exactly once.
+  const handleReceiveDonation = async (id) => {
+    if (!getFinanceToken()) { setUnlockForReceive(id); return; }
+    setReceivingId(id);
+    setReceiveError("");
+    try {
+      const { ok, data } = await financeFetch("/api/cswd/finance/donations/receive/", { method: "POST", json: { donation_id: id } });
+      if (!ok) { setReceiveError(data.message || "Could not mark this donation as received."); return; }
+      await fetchDashboard({ silent: true });
+      setDonationFormSuccess(data.added_to_inventory ? "Donation marked received and added to Inventory." : "Donation marked received.");
+    } catch (err) {
+      if (err instanceof FinanceAuthRequired) setUnlockForReceive(id);
+      else setReceiveError("Unable to connect to the server.");
+    } finally {
+      setReceivingId(null);
+    }
+  };
+
   const handleReliefFieldChange = (field, value) => {
+    setReliefFormError("");
     setReliefFormSuccess("");
     setReliefForm((prev) => ({
       ...prev,
       [field]: value,
-      // A different barangay means a different set of evacuation centers.
+      // Require the operator to choose the destination and quantity for each new selection.
       ...(field === "barangay" ? { evacuation_center_id: "" } : {}),
+      ...(field === "goods_type" ? { quantity: "" } : {}),
     }));
   };
 
   const handleRecordRelief = async (e) => {
     e.preventDefault();
+    if (isSubmittingRelief) return;
     setReliefFormError("");
     setReliefFormSuccess("");
 
-    if (!reliefForm.barangay || !reliefForm.goods_type.trim() || !reliefForm.quantity) {
-      setReliefFormError("Barangay, goods type, and quantity are required.");
+    const selectedStock = (dashboardData?.inventory || []).find(
+      (item) => item.is_pack && String(item.goods_type).toLowerCase() === reliefForm.goods_type && Number(item.quantity) > 0
+    );
+    const centers = (dashboardData?.evacuation_centers || []).filter(
+      (center) => center.barangay === reliefForm.barangay
+    );
+    const destination = String(reliefForm.evacuation_center_id);
+    const validDestination = centers.length
+      ? centers.some((center) => String(center.id) === destination)
+      : destination === "barangay-wide";
+    const disasterChoice = String(reliefForm.disaster_type_id);
+    const validPurpose = disasterChoice === "general" || (dashboardData?.disaster_types || []).some(
+      (disaster) => String(disaster.id) === disasterChoice
+    );
+
+    if (!reliefForm.barangay || !validDestination || !selectedStock ||
+        !validPositiveWhole(reliefForm.quantity) || !validPurpose || !reliefForm.remarks.trim()) {
+      setReliefFormError("Complete every field: barangay, destination, available finished pack, quantity, release purpose and remarks.");
+      return;
+    }
+    if (Number(reliefForm.quantity) > Number(selectedStock.quantity)) {
+      setReliefFormError(`Only ${selectedStock.quantity} ${selectedStock.label} available in Inventory. Make more packs first or lower the quantity.`);
       return;
     }
 
@@ -252,24 +385,27 @@ function CSWDDashboard() {
       const response = await fetch(`${API_URL}/api/cswd/relief/record/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...reliefForm, username }),
+        body: JSON.stringify({
+          ...reliefForm,
+          remarks: reliefForm.remarks.trim(),
+          username,
+        }),
       });
-
       const data = await response.json().catch(() => ({}));
-
       if (!response.ok || !data.success) {
-        setReliefFormError(data.message || "Could not record this relief release. Please try again.");
+        setReliefFormError(data.message || "The release was not saved. Check the available stock and required fields.");
+        // Stock might have changed on a different CSWD screen; refresh our inventory.
+        await fetchDashboard({ silent: true });
         return;
       }
 
-      // Refetch so the new release (Processing), stock and barangay overview all update.
-      await fetchDashboard();
-
-      setReliefFormSuccess(
-        `Logged ${data.relief.quantity} ${data.relief.goods_type} for Brgy. ${data.relief.barangay}` +
-        `${data.relief.evacuation_center ? ` (${data.relief.evacuation_center})` : ""}` +
-        ` — covers ${data.relief.households_served} household${data.relief.households_served === 1 ? "" : "s"}. Now Processing.`
-      );
+      // Success only after Django has committed BOTH the distribution record
+      // and the matching Inventory stock deduction.
+      const refreshed = await fetchDashboard({ silent: true });
+      const confirmation = `Released ${data.relief.quantity} ${data.relief.goods_type} to Brgy. ${data.relief.barangay}` +
+        `${data.relief.evacuation_center ? ` (${data.relief.evacuation_center})` : " (barangay-wide)"}` +
+        `. Tracking: ${data.relief.tracking_number}. Status: Processing; Barangay will confirm receipt.`;
+      setReliefFormSuccess(refreshed ? confirmation : `${confirmation} Stock refresh failed; please reload to see the latest balance.`);
       setReliefForm({
         barangay: "",
         evacuation_center_id: "",
@@ -280,60 +416,164 @@ function CSWDDashboard() {
       });
     } catch (err) {
       console.error(err);
-      setReliefFormError("Unable to connect to the server.");
+      setReliefFormError("Couldn't confirm the server response. Refresh the release list before retrying to avoid duplicate entries.");
     } finally {
       setIsSubmittingRelief(false);
     }
   };
 
-  const handleStockFieldChange = (field, value) => {
-    setStockFormSuccess("");
-    setStockForm((prev) => ({ ...prev, [field]: value }));
+  const postJson = async (path, body) => {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, ...body }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok && data.success !== false, data };
   };
 
-  const handleAddStock = async (e) => {
-    e.preventDefault();
-    setStockFormError("");
-    setStockFormSuccess("");
+  const handleItemFieldChange = (field, value) => {
+    setItemFormSuccess("");
+    setItemForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "name" && (prev.good_for === "" || prev.good_for === suggestPack(prev.name))) {
+        next.good_for = suggestPack(value);
+      }
+      return next;
+    });
+  };
 
-    if (!stockForm.goods_type || !stockForm.quantity) {
-      setStockFormError("Goods type and quantity are required.");
+  const handleAddItem = async (e) => {
+    e.preventDefault();
+    setItemFormError("");
+    setItemFormSuccess("");
+
+    if (!itemForm.name.trim() || !itemForm.unit.trim() ||
+        (itemForm.quantity !== "" && !/^\d+$/.test(String(itemForm.quantity).trim()))) {
+      setItemFormError("Enter item name, unit and a non-negative whole starting quantity.");
+      return;
+    }
+    if (!itemForm.good_for && itemForm.name.trim().toLowerCase() !== "rice") {
+      setItemFormError("Choose which pack this item is good for.");
       return;
     }
 
-    setIsSubmittingStock(true);
+    setIsSubmittingItem(true);
     try {
-      const response = await fetch(`${API_URL}/api/cswd/relief/stock/add/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(stockForm),
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.success) {
-        setStockFormError(data.message || "Could not update stock. Please try again.");
+      const { ok, data } = await postJson("/api/cswd/inventory/items/add/", itemForm);
+      if (!ok) {
+        setItemFormError(data.message || "Could not add this item. Please try again.");
         return;
       }
-
-      setDashboardData((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          relief_stock: (prev.relief_stock || []).map((s) =>
-            s.goods_type === data.stock.goods_type ? { ...s, quantity: data.stock.quantity } : s
-          ),
-        };
-      });
-
-      await fetchDashboard();
-      setStockFormSuccess(`${data.stock.label} in storage is now ${data.stock.quantity}.`);
-      setStockForm({ goods_type: "", quantity: "" });
+      await fetchDashboard({ silent: true });
+      setItemFormSuccess(`${data.item.label} added to the inventory (counted in ${data.item.unit}).`);
+      setItemForm({ name: "", unit: "", good_for: "", quantity: "" });
     } catch (err) {
       console.error(err);
-      setStockFormError("Unable to connect to the server.");
+      setItemFormError("Unable to connect to the server.");
     } finally {
-      setIsSubmittingStock(false);
+      setIsSubmittingItem(false);
+    }
+  };
+
+  const handleSetGoodFor = async (item, value) => {
+    if (!value || value === item.good_for) return;
+    try {
+      const { ok, data } = await postJson("/api/cswd/inventory/items/good-for/", { item_id: item.id, good_for: value });
+      if (!ok) {
+        setManualError(data.message || "Could not change the pack for this item.");
+        return;
+      }
+      await fetchDashboard({ silent: true });
+    } catch (err) {
+      console.error(err);
+      setManualError("Unable to connect to the server.");
+    }
+  };
+
+  const manualQty = (itemId) => {
+    const r = manualRows.find((x) => String(x.item_id) === String(itemId));
+    return r ? r.quantity_per_pack : 0;
+  };
+
+  // Rice is counted in kg and limited per pack.
+  const maxPerPack = (item) => (item.goods_type.toLowerCase() === "rice" ? RICE_MAX_PER_PACK : Infinity);
+
+  const handleManualSet = (item, value) => {
+    setManualError("");
+    setManualSuccess("");
+    let qty = Math.floor(Number(value));
+    if (!Number.isFinite(qty) || qty < 0) qty = 0;
+    qty = Math.min(qty, maxPerPack(item), item.quantity);
+    setManualRows((rows) => {
+      const others = rows.filter((r) => String(r.item_id) !== String(item.id));
+      return qty > 0 ? [...others, { item_id: item.id, quantity_per_pack: qty }] : others;
+    });
+  };
+
+  const handleManualStep = (item, delta) => handleManualSet(item, manualQty(item.id) + delta);
+
+  // Change the number of this ingredient inside ONE pack (not the total stock).
+  // Input can be temporarily empty while editing, but a pack can't be submitted that way.
+  const handleManualPerPackChange = (item, raw) => {
+    if (raw === "") {
+      setManualEmptyInputs((ids) => ids.includes(item.id) ? ids : [...ids, item.id]);
+      return;
+    }
+    if (!/^\d+$/.test(raw) || Number(raw) < 1 || !Number.isSafeInteger(Number(raw))) return;
+    setManualEmptyInputs((ids) => ids.filter((id) => id !== item.id));
+    handleManualSet(item, Number(raw));
+  };
+
+  const handleManualPack = async (e) => {
+    e.preventDefault();
+    setManualError("");
+    setManualSuccess("");
+
+    if (manualRows.length === 0) {
+      setManualError("Add at least one item with the + button.");
+      return;
+    }
+    if (manualEmptyInputs.length > 0) {
+      setManualError("Enter the number of pieces or units of every selected product per pack.");
+      return;
+    }
+    if (!validPositiveWhole(manualPacks)) {
+      setManualError("Enter a positive whole number of packs.");
+      return;
+    }
+    const maxPossible = Math.min(...manualRows.map((row) => {
+      const stock = (dashboardData?.inventory || []).find((i) => String(i.id) === String(row.item_id));
+      return stock && row.quantity_per_pack > 0 ? Math.floor(stock.quantity / row.quantity_per_pack) : 0;
+    }));
+    if (Number(manualPacks) > maxPossible) {
+      setManualError(`Inventory can make at most ${maxPossible} packs with these item quantities. Lower the count or restock.`);
+      return;
+    }
+
+    setIsManualPacking(true);
+    try {
+      const { ok, data } = await postJson("/api/cswd/pack/manual/", {
+        pack_type: manualType,
+        packs: manualPacks,
+        items: manualRows,
+      });
+      if (!ok) {
+        setManualError(data.message || "Could not make this pack.");
+        return;
+      }
+      await fetchDashboard({ silent: true });
+      setManualSuccess(
+        `Made ${data.packs} ${data.pack_stock.label.toLowerCase()}${data.packs === 1 ? "" : "s"} — now ${data.pack_stock.quantity} in storage, ready to release.`
+      );
+      setManualRows([]);
+      setManualEmptyInputs([]);
+      setManualPacks("1");
+    } catch (err) {
+      console.error(err);
+      setManualError("Unable to connect to the server.");
+    } finally {
+      setIsManualPacking(false);
     }
   };
 
@@ -410,6 +650,43 @@ function CSWDDashboard() {
 
   const reliefDistribution = dashboardData?.relief_distribution || [];
   const reliefStock = dashboardData?.relief_stock || [];
+  // A zero-balance canned-only row may exist in databases created before
+  // canned ingredients were folded into Food Pack. Hide that inactive row,
+  // but keep any positive legacy inventory and its transaction history.
+  const inventory = (dashboardData?.inventory || []).filter((item) =>
+    !(String(item.goods_type).toLowerCase() === "canned goods pack" && Number(item.quantity) === 0)
+  );
+  // The finished packs in Inventory are the single source of truth for
+  // selectable Goods Types. Raw ingredients are NOT releasable packs.
+  // Only the four current pack types are releasable. Older canned-only
+  // batches remain in inventory/history but are never silently converted
+  // to Food Packs (which can contain additional ingredients).
+  const releasablePacks = inventory.filter((item) =>
+    item.is_pack && Number(item.quantity) > 0 && PACK_TYPES.includes(String(item.goods_type).toLowerCase())
+  );
+  const selectedReleasePack = releasablePacks.find((item) => String(item.goods_type).toLowerCase() === reliefForm.goods_type);
+  const availableReleaseQuantity = Number(selectedReleasePack?.quantity || 0);
+  const packRecipe = dashboardData?.pack_recipe || [];
+  // With the filter on, only items marked good for the pack being made (and older items with no pack set) are listed.
+  const visibleInventory = onlyForPack
+    ? inventory.filter((i) => !i.is_pack && (!i.good_for || asCurrentPack(i.good_for) === manualType))
+    : inventory;
+  const manualMaxPacks = manualRows.length > 0
+    ? Math.min(...manualRows.map((row) => {
+        const stock = inventory.find((i) => String(i.id) === String(row.item_id));
+        return stock && row.quantity_per_pack > 0 ? Math.floor(stock.quantity / row.quantity_per_pack) : 0;
+      }))
+    : 0;
+  const inventoryHistory = dashboardData?.inventory_history || [];
+  const historyItems = [...new Set(inventoryHistory.map((h) => h.item))].sort();
+  const filteredHistory = inventoryHistory.filter(
+    (h) => (historyDir === "all" || h.direction === historyDir) && (historyItem === "all" || h.item === historyItem)
+  );
+  // Every individual item (anything that is not itself a pack).
+  const packableItems = inventory.filter((i) => !i.is_pack);
+  const donationItem = packableItems.find(
+    (i) => i.label.toLowerCase() === donationForm.goods_type.trim().toLowerCase()
+  );
   const evacuationCenters = dashboardData?.evacuation_centers || [];
   const allHouseholds = dashboardData?.households || [];
   const barangayRelief = dashboardData?.barangay_relief || [];
@@ -418,9 +695,22 @@ function CSWDDashboard() {
   // picked in the Record Relief form.
   const reliefFormCenters = evacuationCenters.filter((c) => c.barangay === reliefForm.barangay);
   const reliefFormBarangay = barangayRelief.find((b) => b.barangay === reliefForm.barangay);
-  const reliefFormCenter = reliefForm.evacuation_center_id
-    ? reliefFormCenters.find((c) => String(c.id) === String(reliefForm.evacuation_center_id))
-    : reliefFormCenters.length === 1 ? reliefFormCenters[0] : null;
+  const reliefFormCenter = reliefFormCenters.find(
+    (center) => String(center.id) === String(reliefForm.evacuation_center_id)
+  );
+  const hasValidReleaseDestination = !!reliefForm.barangay && (
+    reliefFormCenters.length > 0
+      ? !!reliefFormCenter
+      : reliefForm.evacuation_center_id === "barangay-wide"
+  );
+  const hasReleasePurpose = reliefForm.disaster_type_id === "general" ||
+    (dashboardData?.disaster_types || []).some((d) => String(d.id) === String(reliefForm.disaster_type_id));
+  const canSubmitRelief = Boolean(
+    hasValidReleaseDestination && selectedReleasePack &&
+    validPositiveWhole(reliefForm.quantity) &&
+    Number(reliefForm.quantity) <= availableReleaseQuantity &&
+    hasReleasePurpose && reliefForm.remarks.trim()
+  );
 
   // Filtered by the selected barangay, then sorted so the highest-priority
   // (most vulnerable) households surface first — this is what lets CSWD
@@ -501,7 +791,7 @@ function CSWDDashboard() {
               {reliefStock.map((s) => (
                 <article key={s.goods_type} className="stat-card stat-info">
                   <span className="stat-value">{s.quantity}</span>
-                  <span className="stat-label">{s.label} Left in Storage</span>
+                  <span className="stat-label">{s.label} Left in Storage ({s.unit})</span>
                 </article>
               ))}
             </section>
@@ -560,8 +850,8 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Relief Distribution" && (
-          <section className="content-grid relief-tab">
-            <article className="panel">
+          <section className="content-grid relief-tab cswd-relief-distribution">
+            <article className="panel relief-wide">
               <h2>Record Relief Distribution</h2>
               <form className="donation-form" onSubmit={handleRecordRelief}>
                 {reliefFormError && <p className="donation-form-error">{reliefFormError}</p>}
@@ -571,6 +861,7 @@ function CSWDDashboard() {
                   <label htmlFor="relief_barangay">Barangay</label>
                   <select
                     id="relief_barangay"
+                    required
                     value={reliefForm.barangay}
                     onChange={(e) => handleReliefFieldChange("barangay", e.target.value)}
                   >
@@ -583,25 +874,29 @@ function CSWDDashboard() {
 
                 {reliefForm.barangay && (
                   <div className="donation-form-field">
-                    <label htmlFor="relief_evacuation_center_id">Evacuation Center</label>
-                    {reliefFormCenters.length > 0 ? (
-                      <select
-                        id="relief_evacuation_center_id"
-                        value={reliefForm.evacuation_center_id || (reliefFormCenters.length === 1 ? String(reliefFormCenters[0].id) : "")}
-                        onChange={(e) => handleReliefFieldChange("evacuation_center_id", e.target.value)}
-                      >
-                        {reliefFormCenters.length > 1 && <option value="">Select an evacuation center</option>}
-                        {reliefFormCenters.map((c) => (
-                          <option key={c.id} value={c.id}>
+                    <label htmlFor="relief_evacuation_center_id">Relief Destination (required)</label>
+                    <select
+                      id="relief_evacuation_center_id"
+                      required
+                      value={reliefForm.evacuation_center_id}
+                      onChange={(e) => handleReliefFieldChange("evacuation_center_id", e.target.value)}
+                    >
+                      <option value="">Select a destination</option>
+                      {reliefFormCenters.length > 0 ? (
+                        reliefFormCenters.map((c) => (
+                          <option key={c.id} value={String(c.id)}>
                             {c.name} — {c.households_in_center} household{c.households_in_center === 1 ? "" : "s"} inside
                           </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <p className="panel-note">
-                        No evacuation center is set up for {reliefForm.barangay} yet — the release will
-                        cover its {reliefFormBarangay?.registered_households ?? 0} confirmed household(s).
-                      </p>
+                        ))
+                      ) : (
+                        <option value="barangay-wide">Barangay-wide (no evacuation center registered)</option>
+                      )}
+                    </select>
+                    {reliefFormCenters.length === 0 && (
+                      <span className="field-hint">
+                        No evacuation center is registered here. Select Barangay-wide to proceed for
+                        {" "}{reliefFormBarangay?.registered_households ?? 0} confirmed household(s).
+                      </span>
                     )}
                     {reliefFormCenter && (
                       <p className="panel-note">
@@ -614,45 +909,73 @@ function CSWDDashboard() {
                 )}
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_goods_type">Goods Type</label>
-                  <div className="goods-selection-scroll">
-                    {reliefStock.map((s) => (
-                      <div
-                        key={s.goods_type}
-                        className={`goods-option ${reliefForm.goods_type === s.goods_type ? 'selected' : ''} ${s.quantity <= 0 ? 'out-of-stock' : ''}`}
-                        onClick={() => s.quantity > 0 && handleReliefFieldChange("goods_type", s.goods_type)}
+                  <label htmlFor="relief_goods_type">Goods Type (available finished packs only)</label>
+                  <div id="relief_goods_type" className="goods-selection-scroll" role="group" aria-label="Finished packs currently available in Inventory">
+                    {releasablePacks.map((pack) => (
+                      <button
+                        key={pack.id}
+                        type="button"
+                        aria-pressed={reliefForm.goods_type === String(pack.goods_type).toLowerCase()}
+                        className={`goods-option ${reliefForm.goods_type === String(pack.goods_type).toLowerCase() ? "selected" : ""}`}
+                        onClick={() => handleReliefFieldChange("goods_type", String(pack.goods_type).toLowerCase())}
                       >
-                        <span className="goods-name">{s.label}</span>
-                        <span className="goods-quantity">{s.quantity} left</span>
-                      </div>
+                        <span className="goods-name">{pack.label}</span>
+                        <span className="goods-quantity">{pack.quantity} {pack.unit} available</span>
+                      </button>
                     ))}
-                    {reliefStock.length === 0 && (
-                      <p className="field-hint">No goods in storage yet.</p>
+                    {releasablePacks.length === 0 && (
+                      <p className="field-hint">No assembled packs are available yet. Make a Pack in Inventory first.</p>
                     )}
                   </div>
+                  <span className="field-hint">
+                    Goods Types come directly from finished packs in Inventory. Individual canned goods,
+                    Pancit Canton and other ingredients must be packed first.
+                  </span>
+                  {releasablePacks.length === 0 && (
+                    <button type="button" className="relief-btn outline" onClick={() => setActiveItem("Inventory")}>Go to Inventory / Make a Pack</button>
+                  )}
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_quantity">Quantity</label>
+                  <label htmlFor="relief_quantity">Quantity of Packs to Release (required)</label>
                   <input
                     id="relief_quantity"
                     type="number"
-                    min="0"
+                    min="1"
+                    step="1"
+                    required
+                    max={selectedReleasePack ? availableReleaseQuantity : undefined}
+                    disabled={!selectedReleasePack}
                     value={reliefForm.quantity}
                     onChange={(e) => handleReliefFieldChange("quantity", e.target.value)}
+                    placeholder={selectedReleasePack ? `Up to ${availableReleaseQuantity} packs` : "Select Goods Type first"}
                   />
                 </div>
 
+                <p className="stock-availability-note" aria-live="polite">
+                  Available in Inventory: <strong>{availableReleaseQuantity} packs</strong>.
+                  {selectedReleasePack && validPositiveWhole(reliefForm.quantity) && (
+                    <>{" "}Remaining after this release: <strong>
+                      {Number(reliefForm.quantity) <= availableReleaseQuantity
+                        ? availableReleaseQuantity - Number(reliefForm.quantity)
+                        : "Not enough stock"}
+                    </strong>.</>
+                  )}
+                  {" "}The selected finished pack stock is deducted when the release is saved.
+                  Barangay can use the goods only after confirming receipt.
+                </p>
                 <div className="donation-form-field">
-                  <label htmlFor="relief_disaster_type_id">Disaster Type</label>
+                  <label htmlFor="relief_disaster_type_id">Release Purpose / Disaster (required)</label>
                   <select
                     id="relief_disaster_type_id"
+                    required
                     value={reliefForm.disaster_type_id}
                     onChange={(e) => handleReliefFieldChange("disaster_type_id", e.target.value)}
                   >
-                    <option value="">Not tied to a specific disaster</option>
+                    <option value="">Select a release purpose</option>
+                    <option value="general">General relief (not tied to a disaster)</option>
                     {(dashboardData?.disaster_types || []).map((dt) => (
-                      <option key={dt.id} value={dt.id}>
+                      <option key={dt.id} value={String(dt.id)}>
                         {dt.name}{dt.status === "closed" ? " (Closed)" : ""}
                       </option>
                     ))}
@@ -660,44 +983,30 @@ function CSWDDashboard() {
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_remarks">Remarks (optional)</label>
+                  <label htmlFor="relief_remarks">Remarks / Reason (required)</label>
                   <input
                     id="relief_remarks"
                     type="text"
+                    required
+                    maxLength={255}
                     value={reliefForm.remarks}
                     onChange={(e) => handleReliefFieldChange("remarks", e.target.value)}
-                    placeholder="e.g. Picked up by household head"
+                    placeholder="e.g. Relief for families at the evacuation center"
                   />
                 </div>
 
                 <div className="donation-form-actions">
-                  <button type="submit" className="action-btn" disabled={isSubmittingRelief}>
+                  <button type="submit" className="action-btn" disabled={isSubmittingRelief || !canSubmitRelief}>
                     {isSubmittingRelief ? "Saving…" : "Record Relief Release"}
                   </button>
                 </div>
-              </form>
-            </article>
+                {!canSubmitRelief && !isSubmittingRelief && (
+                  <p className="field-hint" style={{ gridColumn: "1 / -1" }}>
+                    Complete every field above and choose a quantity that does not exceed the finished packs in Inventory.
+                  </p>
+                )}
 
-            <article className="panel">
-              <h2>Relief Goods Storage</h2>
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Goods Type</th>
-                      <th>Left in Storage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reliefStock.map((s) => (
-                      <tr key={s.goods_type}>
-                        <td>{s.label}</td>
-                        <td>{s.quantity}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              </form>
             </article>
 
             <article className="panel relief-wide">
@@ -884,6 +1193,337 @@ function CSWDDashboard() {
                 </table>
               </div>
                 )}</Paginated>
+            </article>
+          </section>
+        )}
+
+        {activeItem === "Inventory" && (
+          <section className="content-grid relief-tab cswd-inventory-page">
+            <article className="panel relief-wide">
+              <h2>Add a New Item</h2>
+              <form className="donation-form" onSubmit={handleAddItem}>
+                {itemFormError && <p className="donation-form-error">{itemFormError}</p>}
+                {itemFormSuccess && <p className="panel-note">{itemFormSuccess}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="item_name">Item Name</label>
+                  <input
+                    id="item_name"
+                    type="text"
+                    required
+                    value={itemForm.name}
+                    onChange={(e) => handleItemFieldChange("name", e.target.value)}
+                    placeholder="e.g. Canned sardines"
+                  />
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="item_good_for">Good for</label>
+                  <select
+                    id="item_good_for"
+                    required
+                    value={itemForm.good_for}
+                    onChange={(e) => handleItemFieldChange("good_for", e.target.value)}
+                  >
+                    <option value="">Select pack</option>
+                    {PACK_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <span className="field-hint">Food Pack includes canned goods (sardines, corned beef, beef loaf), noodles, canton, and other food.</span>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="item_unit">Unit</label>
+                  <input
+                    id="item_unit"
+                    type="text"
+                    required
+                    list="item-unit-options"
+                    value={itemForm.unit}
+                    onChange={(e) => handleItemFieldChange("unit", e.target.value)}
+                    placeholder="e.g. kg, pcs, liters"
+                  />
+                  <datalist id="item-unit-options">
+                    <option value="kg" />
+                    <option value="pcs" />
+                    <option value="liters" />
+                    <option value="sacks" />
+                    <option value="boxes" />
+                    <option value="cans" />
+                  </datalist>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="item_quantity">Starting Quantity (optional)</label>
+                  <input
+                    id="item_quantity"
+                    type="number"
+                    min="0"
+                    value={itemForm.quantity}
+                    onChange={(e) => handleItemFieldChange("quantity", e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div className="donation-form-actions">
+                  <button type="submit" className="action-btn" disabled={isSubmittingItem}>
+                    {isSubmittingItem ? "Saving…" : "Add Item"}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel relief-wide">
+              <h2>Make a Pack</h2>
+              <p className="panel-note">
+                Choose a pack type, then use + in the Inventory list to select ingredients. Set how many of EACH product go into ONE pack, then choose how many identical packs to make. Canned goods are included in Food Pack.
+              </p>
+              <form onSubmit={handleManualPack}>
+                {manualError && <p className="donation-form-error">{manualError}</p>}
+                {manualSuccess && <p className="panel-note" style={{ color: "#047857", fontWeight: 600 }}>{manualSuccess}</p>}
+
+                <div className="donation-form-field">
+                  <label htmlFor="manual_pack_type">Make</label>
+                  <select
+                    id="manual_pack_type"
+                    value={manualType}
+                    onChange={(e) => { setManualError(""); setManualSuccess(""); setManualRows([]); setManualEmptyInputs([]); setManualPacks("1"); setManualType(e.target.value); }}
+                  >
+                    {PACK_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="make-pack-filter">
+                  <input type="checkbox" checked={onlyForPack} onChange={(e) => setOnlyForPack(e.target.checked)} />
+                  Only show items good for this pack in the Inventory list below
+                </label>
+
+                <div className="table-scroll" style={{ marginTop: 10 }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Per Pack</th>
+                        <th>Total Needed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualRows.length > 0 ? manualRows.map((r) => {
+                        const i = inventory.find((x) => x.id === r.item_id);
+                        if (!i) return null;
+                        const count = validPositiveWhole(manualPacks) ? Number(manualPacks) : 0;
+                        const total = r.quantity_per_pack * count;
+                        const short = total > i.quantity;
+                        const isEditingEmpty = manualEmptyInputs.includes(r.item_id);
+                        return (
+                          <tr key={r.item_id}>
+                            <td>
+                              {i.label} ({i.unit})
+                              <span className="field-hint">Available: {i.quantity} {i.unit}</span>
+                            </td>
+                            <td>
+                              <div className="donation-form-field">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  max={Math.min(i.quantity, maxPerPack(i))}
+                                  required
+                                  aria-label={`${i.label} quantity in each pack`}
+                                  title={`Quantity of ${i.label} in one pack`}
+                                  style={{ width: 95, maxWidth: "100%" }}
+                                  value={isEditingEmpty ? "" : r.quantity_per_pack}
+                                  onChange={(e) => handleManualPerPackChange(i, e.target.value)}
+                                  onBlur={() => setManualEmptyInputs((ids) => ids.filter((id) => id !== r.item_id))}
+                                />
+                              </div>
+                            </td>
+                            <td style={short ? { color: "#b91c1c", fontWeight: 700 } : undefined}>
+                              {isEditingEmpty ? "Enter amount" : `${total} ${i.unit}`}{short ? " (not enough)" : ""}
+                              {!isEditingEmpty && count > 0 && !short && (
+                                <span className="field-hint">Left after making {count}: {i.quantity - total} {i.unit}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      }) : (
+                        <tr>
+                          <td colSpan="3">No items added yet. Press + on an item below.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="donation-form-field" style={{ marginTop: 12 }}>
+                  <label htmlFor="manual_packs">How many packs to make</label>
+                  <span className="field-hint">Maximum complete packs based on ALL selected ingredients: <strong>{manualMaxPacks}</strong>. The ingredient with the lowest available pack count determines the limit.</span>
+                  <input
+                    id="manual_packs"
+                    type="number"
+                    min="1"
+                    step="1"
+                    max={manualMaxPacks || undefined}
+                    required
+                    value={manualPacks}
+                    onChange={(e) => { setManualError(""); setManualSuccess(""); setManualPacks(e.target.value); }}
+                  />
+                </div>
+
+                <div className="donation-form-actions" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                  <button type="button" className="relief-btn outline"
+                    onClick={() => { setManualRows([]); setManualEmptyInputs([]); setManualError(""); setManualPacks("1"); }}
+                    disabled={manualRows.length === 0}>
+                    Clear
+                  </button>
+                  <button type="button" className="relief-btn outline"
+                    onClick={() => { setManualPacks(String(manualMaxPacks)); setManualError(""); setManualSuccess(""); }}
+                    disabled={manualRows.length === 0 || manualMaxPacks === 0 || manualEmptyInputs.length > 0}>
+                    Use Maximum ({manualMaxPacks})
+                  </button>
+                  <button type="submit" className="action-btn"
+                    disabled={isManualPacking || manualRows.length === 0 || manualEmptyInputs.length > 0 || !validPositiveWhole(manualPacks) || Number(manualPacks) > manualMaxPacks}>
+                    {isManualPacking ? "Making…" : `Make ${validPositiveWhole(manualPacks) ? manualPacks + " " : ""}${PACK_TYPE_OPTIONS.find((o) => o.value === manualType)?.label}${Number(manualPacks) === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <article className="panel relief-wide">
+              <h2>Inventory</h2>
+              <Paginated items={visibleInventory} resetKey={`${onlyForPack}|${manualType}`}>{(pageRows) => (
+                <div className="table-scroll">
+                  <table className="data-table inventory-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Good For</th>
+                        <th>Unit</th>
+                        <th>In Storage</th>
+                        <th>Total Stored</th>
+                        <th>Total Out</th>
+                        <th>Last Stored</th>
+                        <th>Last Out</th>
+                        <th>Add to Pack</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleInventory.length > 0 ? (
+                        pageRows.map((i) => (
+                          <tr key={i.id}>
+                            <td>{String(i.goods_type).toLowerCase() === "canned goods pack" ? "Legacy Canned Goods Pack (old stock; reconcile before use)" : i.label}</td>
+                            <td>
+                              {i.is_pack ? "—" : (
+                                <select
+                                  className="good-for-select"
+                                  value={asCurrentPack(i.good_for)}
+                                  aria-label={`Pack that ${i.label} is good for`}
+                                  onChange={(e) => handleSetGoodFor(i, e.target.value)}
+                                >
+                                  {!i.good_for && <option value="">Not set</option>}
+                                  {PACK_TYPE_OPTIONS.map((o) => (
+                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                  ))}
+                                </select>
+                              )}
+                            </td>
+                            <td>{i.unit}</td>
+                            <td><strong>{i.quantity}</strong></td>
+                            <td>{i.total_stored}</td>
+                            <td>{i.total_out}</td>
+                            <td>{i.last_stored || "—"}</td>
+                            <td>{i.last_out || "—"}</td>
+                            <td>
+                              {i.is_pack ? "—" : (
+                                <div className="stepper">
+                                  <button type="button" className="relief-btn outline" aria-label={`Less ${i.label}`}
+                                    disabled={manualQty(i.id) <= 0} onClick={() => handleManualStep(i, -1)}>−</button>
+                                  <span className="stepper-value">{manualQty(i.id)}</span>
+                                  <button type="button" className="relief-btn outline" aria-label={`Add ${i.label} to the pack`}
+                                    disabled={i.quantity <= 0 || manualQty(i.id) >= Math.min(maxPerPack(i), i.quantity)} onClick={() => handleManualStep(i, 1)}>+</button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="9">{onlyForPack ? "No items marked for this pack yet." : "No items in the inventory yet."}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}</Paginated>
+            </article>
+
+            <article className="panel relief-wide">
+              <h2>Stock History</h2>
+              <p className="panel-note">
+                Every time stock goes in (donations, restocks, finished packs) or out (used in a pack, released to a barangay), with the date and the balance left.
+              </p>
+              <div className="panel-toolbar history-toolbar">
+                <label htmlFor="history-dir" className="panel-toolbar-label">Show:</label>
+                <select id="history-dir" className="barangay-select" value={historyDir} onChange={(e) => setHistoryDir(e.target.value)}>
+                  <option value="all">All movements</option>
+                  <option value="in">Stored (in)</option>
+                  <option value="out">Taken out</option>
+                </select>
+                <label htmlFor="history-item" className="panel-toolbar-label">Item:</label>
+                <select id="history-item" className="barangay-select" value={historyItem} onChange={(e) => setHistoryItem(e.target.value)}>
+                  <option value="all">All items</option>
+                  {historyItems.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+              <Paginated items={filteredHistory} resetKey={`${historyDir}|${historyItem}`}>{(pageRows) => (
+                <div className="table-scroll">
+                  <table className="data-table stock-history-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Item</th>
+                        <th>Type</th>
+                        <th>Quantity</th>
+                        <th>Balance</th>
+                        <th>Details</th>
+                        <th>By</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredHistory.length > 0 ? (
+                        pageRows.map((h) => (
+                          <tr key={h.id}>
+                            <td>{h.date}</td>
+                            <td>{h.time}</td>
+                            <td>{h.item}</td>
+                            <td>
+                              <span className={`status-badge ${h.direction === "in" ? "status-open" : "status-pending"}`}>
+                                {h.reason_label}
+                              </span>
+                            </td>
+                            <td className={h.direction === "in" ? "qty-in" : "qty-out"}>
+                              {h.direction === "in" ? "+" : "−"}{h.quantity} {h.unit}
+                            </td>
+                            <td>{h.balance_after} {h.unit}</td>
+                            <td className="details-cell">{h.details || "—"}</td>
+                            <td>{h.recorded_by || "—"}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="8">No stock movements yet.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}</Paginated>
             </article>
           </section>
         )}
@@ -1175,7 +1815,30 @@ function CSWDDashboard() {
         )}
 
         {activeItem === "Donations" && (
+          <>
+          <div className="panel-toolbar" style={{ cursor: "default" }}>
+            <div className="relief-seg">
+              <button type="button" className={`relief-seg-btn${donationView === "goods" ? " active" : ""}`}
+                onClick={() => setDonationView("goods")}>Goods Donations</button>
+              <button type="button" className={`relief-seg-btn${donationView === "cash" ? " active" : ""}`}
+                onClick={() => setDonationView("cash")}>Cash Donations</button>
+            </div>
+          </div>
+          {donationView === "cash" ? (
+            <CashFunds
+              username={username}
+              inventory={dashboardData?.inventory || []}
+              disasterTypes={dashboardData?.disaster_types || []}
+              onInventoryChanged={() => fetchDashboard({ silent: true })}
+            />
+          ) : (
           <section className="content-grid">
+            {unlockForReceive !== null && (
+              <FinanceUnlockPanel
+                username={username}
+                onUnlocked={() => { const id = unlockForReceive; setUnlockForReceive(null); handleReceiveDonation(id); }}
+              />
+            )}
             <article className="panel">
               <h2>Log a Donation</h2>
               <form className="donation-form" onSubmit={handleAddDonation}>
@@ -1187,6 +1850,7 @@ function CSWDDashboard() {
                   <input
                     id="donor_name"
                     type="text"
+                    required
                     value={donationForm.donor_name}
                     onChange={(e) => handleDonationFieldChange("donor_name", e.target.value)}
                     placeholder="e.g. Juan Dela Cruz"
@@ -1194,7 +1858,7 @@ function CSWDDashboard() {
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="contact_num">Contact Number</label>
+                  <label htmlFor="contact_num">Contact Number (optional)</label>
                   <input
                     id="contact_num"
                     type="text"
@@ -1205,24 +1869,65 @@ function CSWDDashboard() {
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="goods_type">Goods Type</label>
-                  <select
+                  <label htmlFor="goods_type">Item Received</label>
+                  <input
                     id="goods_type"
+                    type="text"
+                    required
+                    list="donation-item-options"
                     value={donationForm.goods_type}
                     onChange={(e) => handleDonationFieldChange("goods_type", e.target.value)}
+                    placeholder="e.g. Rice, Canned sardines, Noodles, Paracetamol, Water bottle"
+                  />
+                  <datalist id="donation-item-options">
+                    {packableItems.map((i) => (
+                      <option key={i.id} value={i.label} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="donation_good_for">Good for</label>
+                  <select
+                    id="donation_good_for"
+                    value={asCurrentPack(donationItem && donationItem.good_for ? donationItem.good_for : donationForm.good_for)}
+                    disabled={!!(donationItem && donationItem.good_for)}
+                    onChange={(e) => handleDonationFieldChange("good_for", e.target.value)}
                   >
-                    <option value="">Select goods type</option>
-                    <option value="rice">Rice</option>
-                    <option value="pack">Pack (all other goods)</option>
+                    <option value="">Select pack</option>
+                    {PACK_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <span className="field-hint">Food Pack includes canned goods (sardines, corned beef, beef loaf), noodles, canton, and other food.</span>
+                </div>
+
+                <div className="donation-form-field">
+                  <label htmlFor="donation_unit">Unit</label>
+                  <select
+                    id="donation_unit"
+                    value={donationItem ? donationItem.unit : donationForm.unit}
+                    disabled={!!donationItem}
+                    onChange={(e) => handleDonationFieldChange("unit", e.target.value)}
+                  >
+                    <option value="pcs">Pieces (pcs)</option>
+                    <option value="kg">Kilograms (kg)</option>
+                    {donationItem && !["pcs", "kg"].includes(donationItem.unit) && (
+                      <option value={donationItem.unit}>{donationItem.unit}</option>
+                    )}
                   </select>
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="quantity">Quantity</label>
+                  <label htmlFor="quantity">
+                    Quantity ({donationItem ? donationItem.unit : donationForm.unit})
+                  </label>
                   <input
                     id="quantity"
                     type="number"
-                    min="0"
+                    min="1"
+                    step="1"
+                    required
                     value={donationForm.quantity}
                     onChange={(e) => handleDonationFieldChange("quantity", e.target.value)}
                     placeholder="e.g. 50"
@@ -1234,6 +1939,7 @@ function CSWDDashboard() {
                   <input
                     id="donation_date"
                     type="date"
+                    required
                     value={donationForm.donation_date}
                     onChange={(e) => handleDonationFieldChange("donation_date", e.target.value)}
                   />
@@ -1253,7 +1959,7 @@ function CSWDDashboard() {
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="disaster_type_id">Disaster Type</label>
+                  <label htmlFor="disaster_type_id">Disaster Type (optional)</label>
                   <select
                     id="disaster_type_id"
                     value={donationForm.disaster_type_id}
@@ -1277,45 +1983,8 @@ function CSWDDashboard() {
             </article>
 
             <article className="panel">
-              <h2>Add to Storage</h2>
-              <form className="donation-form" onSubmit={handleAddStock}>
-                {stockFormError && <p className="donation-form-error">{stockFormError}</p>}
-                {stockFormSuccess && <p className="panel-note">{stockFormSuccess}</p>}
-
-                <div className="donation-form-field">
-                  <label htmlFor="stock_goods_type">Goods Type</label>
-                  <select
-                    id="stock_goods_type"
-                    value={stockForm.goods_type}
-                    onChange={(e) => handleStockFieldChange("goods_type", e.target.value)}
-                  >
-                    <option value="">Select goods type</option>
-                    <option value="rice">Rice</option>
-                    <option value="pack">Pack (all other goods)</option>
-                  </select>
-                </div>
-
-                <div className="donation-form-field">
-                  <label htmlFor="stock_quantity">Quantity to Add</label>
-                  <input
-                    id="stock_quantity"
-                    type="number"
-                    min="1"
-                    value={stockForm.quantity}
-                    onChange={(e) => handleStockFieldChange("quantity", e.target.value)}
-                  />
-                </div>
-
-                <div className="donation-form-actions">
-                  <button type="submit" className="action-btn" disabled={isSubmittingStock}>
-                    {isSubmittingStock ? "Saving…" : "Add to Storage"}
-                  </button>
-                </div>
-              </form>
-            </article>
-
-            <article className="panel">
               <h2>Donation Records</h2>
+              {receiveError && <p className="donation-form-error">{receiveError}</p>}
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -1340,10 +2009,21 @@ function CSWDDashboard() {
                               {d.donor_name}
                             </td>
                             <td>{d.goods_type}</td>
-                            <td>{d.quantity}</td>
+                            <td>{d.quantity} {d.unit}</td>
                             <td>{d.donation_date}</td>
                             <td>
                               <span className={`status-badge status-${d.status}`}>{d.status}</span>
+                              {d.status === "pending" && (
+                                <button
+                                  type="button"
+                                  className="relief-btn outline"
+                                  style={{ marginLeft: 8 }}
+                                  disabled={receivingId === d.id}
+                                  onClick={(e) => { e.stopPropagation(); handleReceiveDonation(d.id); }}
+                                >
+                                  {receivingId === d.id ? "Saving…" : "Mark Received"}
+                                </button>
+                              )}
                             </td>
                           </tr>
 
@@ -1405,6 +2085,8 @@ function CSWDDashboard() {
             </article>
 
           </section>
+          )}
+          </>
         )}
 
         {activeItem === "Reports" && (

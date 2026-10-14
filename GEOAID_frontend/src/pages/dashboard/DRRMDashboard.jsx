@@ -5,6 +5,7 @@ import Sidebar from "../../components/sidebar";
 import { Paginated } from "../../components/Pagination";
 import EvacuationMap from "./EvacuationMap";
 import { API_URL } from "../../config";
+import EmergencyContactsManager from "./EmergencyContactsManager";
 
 // Reorganized to match the thesis's actual DRRM use case: "DRRMC can
 // log in, manage disaster situations and evacuation routes, monitor
@@ -622,6 +623,7 @@ function DRRMDashboard() {
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Situations & Routes")}>Manage Situations &amp; Routes</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Evacuation Map")}>Open Evacuation Map</button>
                   <button type="button" className="action-btn" onClick={() => setActiveItem("Reports")}>Generate Report</button>
+                  <button type="button" className="action-btn" onClick={() => setActiveItem("Settings")}>Emergency Contacts</button>
                 </div>
               </article>
             </section>
@@ -1150,11 +1152,14 @@ function DRRMDashboard() {
         )}
 
         {activeItem === "Settings" && (
+          <>
+          <EmergencyContactsManager apiUrl={API_URL} username={username} />
           <section className="panel">
             <p className="panel-note">
               Account settings for DRRM Officers will be available here soon.
             </p>
           </section>
+          </>
         )}
       </div>
     </div>

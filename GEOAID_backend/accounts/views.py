@@ -1,7 +1,7 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import Count, Q, Sum, ProtectedError, RestrictedError
+from django.db.models import Count, Max, Q, Sum, F, ProtectedError, RestrictedError
 from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -15,6 +15,7 @@ from .models import (
     EvacuationRoute, ReliefStock, ReliefDistribution,
     goods_label, GOODS_TYPES, DisasterType, Report,
     VulnerabilityProfile, sync_vulnerability_profile, priority_from_flags, Purok,
+    PackComponent, DEFAULT_UNITS, PACK_TYPES, InventoryMovement,
 )
 from . import routing
 import re
@@ -425,7 +426,7 @@ def _barangay_relief_overview(centers_payload):
         elif any(r.claim_status in ("processing", "pending") for r in recs):
             status = "Processing"
         elif claimed:
-            status = "Relief Given"
+            status = "Received by Barangay"
         else:
             status = "Not Yet Given"
         last = recs[0] if recs else None
@@ -451,7 +452,7 @@ def cswd_dashboard(request):
     Purok President -> Barangay Staff review chain (status='confirmed').
     Relief releases are made per barangay (to its evacuation center) and
     backed by ReliefDistribution, and current
-    relief-goods stock (rice / pack) by ReliefStock — see
+    relief-goods stock (the four pack types) by ReliefStock — see
     cswd_record_relief and cswd_add_relief_stock below. Donations are
     backed by the Donation model (CSWD logs each drop-off themselves
     from the Donations tab — see cswd_add_donation below)."""
@@ -506,20 +507,20 @@ def cswd_dashboard(request):
             "claimed_at": _format_ph(r.claimed_at, "%b %d, %Y %I:%M %p"),
         })
 
-    # Current relief-goods stock — what's actually left in storage. Only
-    # two types exist: rice and pack (a pack holds all the other goods).
-    # Both rows are created at zero if missing; cswd_add_relief_stock
-    # restocks, cswd_record_relief deducts.
-    for g in GOODS_TYPES:
-        if not ReliefStock.objects.filter(goods_type__iexact=g).exists():
-            ReliefStock.objects.create(goods_type=g, quantity=0)
+    # Current relief-goods stock — what's actually left in storage.
+    # `relief_stock` is what can be released to barangays (the four pack
+    # types: rice / canned goods / food / medicine / water pack); `inventory` is every
+    # item CSWD stores (rice in kg, canned goods in pcs, ...), and
+    # `pack_recipe` is what goes into one pack of each pack type.
+    _ensure_builtin_stock()
     relief_stock = [
-        {"goods_type": s.goods_type, "label": s.get_goods_type_display(), "quantity": s.quantity}
+        _stock_payload(s)
         for s in sorted(
-            (s for s in ReliefStock.objects.all() if s.goods_type.lower() in GOODS_TYPES),
-            key=lambda s: GOODS_TYPES.index(s.goods_type.lower()),
+            (s for s in ReliefStock.objects.all() if s.goods_type.lower() in CURRENT_PACK_TYPES),
+            key=lambda s: CURRENT_PACK_TYPES.index(s.goods_type.lower()),
         )
     ]
+    inventory, pack_recipe, pack_max = _inventory_overview()
 
     from .models import DisasterType
 
@@ -531,6 +532,7 @@ def cswd_dashboard(request):
             "contact_num": d.contact_num,
             "goods_type": d.goods_type,
             "quantity": d.quantity,
+            "unit": d.unit,
             "donation_date": d.donation_date.strftime("%b %d, %Y") if d.donation_date else "",
             "status": d.status,
             "disaster_type": d.disaster_type.disaster_type_name if d.disaster_type else "",
@@ -578,6 +580,12 @@ def cswd_dashboard(request):
 
         "relief_distribution": relief_distribution,
         "relief_stock": relief_stock,
+        "inventory": inventory,
+        "inventory_history": _inventory_history(),
+        "pack_recipe": pack_recipe,
+        "pack_max": pack_max,
+        # Pack Builder: one section per pack type.
+        "pack_types": _pack_type_options(),
         "priority_beneficiaries": priority,
         "donation_records": donation_records,
         "disaster_types": disaster_types,
@@ -597,30 +605,286 @@ def cswd_dashboard(request):
     return JsonResponse(data)
 
 
+RICE_MAX_PER_PACK = 10  # kg of rice allowed in one pack
+
+
+def _whole_quantity(value, *, allow_zero=False):
+    """Return a validated whole-number stock quantity; reject decimals and booleans."""
+    raw = str(value).strip()
+    if isinstance(value, bool) or len(raw) > 12 or not re.fullmatch(r"[0-9]+", raw):
+        return None
+    number = int(raw)
+    if number > 2_147_483_647 or number < (0 if allow_zero else 1):
+        return None
+    return number
+
+
+
 def _clean_goods_name(text):
-    """Normalises a goods type to "rice" or "pack" (case/space
-    insensitive). Returns "" for anything else, so callers can reject it."""
+    """Normalises a RELEASE goods type to one of the four pack types
+    (case/space insensitive). Returns "" for anything else, so callers can
+    reject it. Only packs can be released to barangays; individual
+    inventory items leave storage by being assembled into packs."""
     name = " ".join((text or "").split()).lower()
-    return name if name in GOODS_TYPES else ""
+    return name if name in CURRENT_PACK_TYPES else ""
 
 
-def _stock_for_goods(goods_name, create=True):
+def _clean_item_name(text):
+    """Collapses spaces in an inventory item name (keeps the case typed)."""
+    return " ".join((text or "").split())
+
+
+def _inventory_item_name(text):
+    """Name of an EXISTING inventory item (case-insensitive), lowercased
+    as stored, or "" when no such item exists yet."""
+    name = _clean_item_name(text)
+    if not name:
+        return ""
+    stock = ReliefStock.objects.filter(goods_type__iexact=name).first()
+    return stock.goods_type if stock else ""
+
+
+def _clean_unit(text):
+    return " ".join((text or "").split()).lower()[:20]
+
+
+def _ensure_builtin_stock():
+    """The four active pack types (rice / food / medicine / water) and the
+    rice item (always counted in kg) always exist."""
+    # Do not create a NEW canned-only pack row on every dashboard load.
+    # Pre-existing rows remain untouched for historical accuracy.
+    for g in CURRENT_PACK_TYPES:
+        stock = ReliefStock.objects.filter(goods_type__iexact=g).first()
+        if stock is None:
+            ReliefStock.objects.create(goods_type=g, quantity=0, unit=DEFAULT_UNITS[g])
+        elif stock.unit != DEFAULT_UNITS[g]:
+            stock.unit = DEFAULT_UNITS[g]
+            stock.save(update_fields=["unit"])
+    # Items without a "good for" pack yet (or tagged by the old category
+    # system) get one guessed from their name. A pack CSWD chose is never
+    # changed here.
+    for s in ReliefStock.objects.exclude(goods_type__in=list(GOODS_TYPES)):
+        if s.category in GOODS_TYPES:
+            continue
+        new = _guess_good_for(s.goods_type) or _LEGACY_GOOD_FOR.get(s.category, "")
+        if new and new != s.category:
+            s.category = new
+            s.save(update_fields=["category"])
+
+    rice = ReliefStock.objects.filter(goods_type__iexact="rice").first()
+    if rice is None:
+        ReliefStock.objects.create(goods_type="rice", quantity=0, unit="kg", category="rice pack")
+    elif rice.unit != "kg" or not _good_for(rice):
+        rice.unit = "kg"
+        rice.category = "rice pack"
+        rice.save(update_fields=["unit", "category"])
+
+
+def _component_pack_type(component):
+    """Return the current recipe category; legacy canned recipes belong to food."""
+    if component.pack_type == "canned goods pack":
+        return "food pack"
+    return component.pack_type if component.pack_type in GOODS_TYPES else "food pack"
+
+
+# The separate canned pack is retained in GOODS_TYPES only for stock/history
+# compatibility. New packing combines canned ingredients with other food.
+CURRENT_PACK_TYPES = tuple(g for g in GOODS_TYPES if g != "canned goods pack")
+
+
+def _pack_type_options():
+    return [{"value": g, "label": goods_label(g)} for g in CURRENT_PACK_TYPES]
+
+
+# Keywords used to suggest which pack an item is good for from its name.
+# Canned goods (sardines, corned beef, beef loaf...) and noodles all go
+# into the same Food Pack.
+_CANNED_WORDS = ("sardine", "corned beef", "beef loaf", "meat loaf", "meatloaf", "tuna", "mackerel",
+                 "canned", "vienna", "luncheon", "spam", "liver spread", "pork and beans", "bangus",
+                 "century", "argentina", "555", "ligo", "mega sardines")
+_MEDICINE_WORDS = ("medicine", "paracetamol", "biogesic", "tablet", "capsule", "syrup", "vitamin",
+                   "antibiotic", "amoxicillin", "bandage", "first aid", "alcohol", "mask", "oresol",
+                   "betadine", "gauze", "povidone")
+_FOOD_WORDS = ("noodle", "canton", "pancit", "instant", "biscuit", "cracker", "coffee", "sugar", "salt",
+               "cooking oil", "milk", "cereal", "oat", "bread", "egg", "soy sauce", "vinegar", "cup")
+
+
+def _guess_good_for(name):
+    n = (name or "").strip().lower()
+    if not n:
+        return ""
+    if n == "rice" or n.startswith("rice "):
+        return "rice pack"
+    if any(w in n for w in _CANNED_WORDS):
+        return "food pack"
+    if any(w in n for w in _MEDICINE_WORDS):
+        return "medicine pack"
+    if "water" in n:
+        return "water pack"
+    if any(w in n for w in _FOOD_WORDS):
+        return "food pack"
+    return ""
+
+
+_LEGACY_GOOD_FOR = {"rice": "rice pack", "canned_noodles": "food pack", "medicine": "medicine pack", "water": "water pack"}
+
+
+def _good_for(stock):
+    """The active pack category for an ingredient (including legacy tags)."""
+    if stock.goods_type.lower() in PACK_TYPES:
+        return ""
+    cat = (stock.category or "").strip().lower()
+    if cat == "canned goods pack":
+        return "food pack"
+    return cat if cat in CURRENT_PACK_TYPES else _LEGACY_GOOD_FOR.get(cat, "")
+
+
+def _clean_good_for(value):
+    value = (value or "").strip().lower()
+    if value == "canned goods pack":
+        return "food pack"  # Accept old clients without making a separate pack.
+    return value if value in CURRENT_PACK_TYPES else ""
+
+
+def _stock_payload(s):
+    good_for = _good_for(s)
+    return {
+        "id": s.id,
+        "goods_type": s.goods_type,
+        "label": s.get_goods_type_display(),
+        "unit": s.unit,
+        "quantity": s.quantity,
+        "is_pack": s.goods_type.lower() in PACK_TYPES,
+        "good_for": good_for,
+        "good_for_label": goods_label(good_for),
+    }
+
+
+def _inventory_overview():
+    """(inventory, pack_recipe, pack_max): every stored item (pack types
+    first), the recipe lines (each tagged with the pack type CSWD put the
+    item into, with how many packs the current stock could still make),
+    and pack_max, a dict of pack type -> how many packs of that type can be
+    made from the current stock and recipe."""
+    items = list(ReliefStock.objects.select_related("pack_component"))
+    items.sort(key=lambda s: (
+        GOODS_TYPES.index(s.goods_type.lower()) if s.goods_type.lower() in GOODS_TYPES else len(GOODS_TYPES),
+        s.goods_type.lower(),
+    ))
+    # Items that already had stock before the history existed get one
+    # "opening stock" row, so their totals and balances add up.
+    have_history = set(InventoryMovement.objects.values_list("item_id", flat=True).distinct())
+    for s in items:
+        if s.id not in have_history and s.quantity > 0:
+            InventoryMovement.objects.create(
+                item=s, movement_type="in", reason="initial", quantity=s.quantity,
+                balance_after=s.quantity, details="Opening stock (before history was recorded)",
+                moved_at=s.updated_at or timezone.now(),
+            )
+
+    totals = {
+        row["item_id"]: row
+        for row in InventoryMovement.objects.values("item_id").annotate(
+            total_in=Sum("quantity", filter=Q(movement_type="in")),
+            total_out=Sum("quantity", filter=Q(movement_type="out")),
+            last_in=Max("moved_at", filter=Q(movement_type="in")),
+            last_out=Max("moved_at", filter=Q(movement_type="out")),
+        )
+    }
+
+    inventory = []
+    for s in items:
+        comp = getattr(s, "pack_component", None) if hasattr(s, "pack_component") else None
+        t = totals.get(s.id, {})
+        inventory.append(dict(
+            _stock_payload(s),
+            in_pack=comp is not None,
+            pack_type=_component_pack_type(comp) if comp is not None else "",
+            total_stored=t.get("total_in") or 0,
+            total_out=t.get("total_out") or 0,
+            last_stored=_format_ph(t.get("last_in"), "%b %d, %Y") if t.get("last_in") else "",
+            last_out=_format_ph(t.get("last_out"), "%b %d, %Y") if t.get("last_out") else "",
+        ))
+
+    recipe = []
+    pack_max = {g: None for g in GOODS_TYPES}
+    for c in PackComponent.objects.select_related("item"):
+        pack_type = _component_pack_type(c)
+        can_make = c.item.quantity // c.quantity_per_pack if c.quantity_per_pack else 0
+        recipe.append({
+            "id": c.id,
+            "item_id": c.item_id,
+            "goods_type": c.item.goods_type,
+            "label": c.item.get_goods_type_display(),
+            "unit": c.item.unit,
+            "pack_type": pack_type,
+            "quantity_per_pack": c.quantity_per_pack,
+            "in_stock": c.item.quantity,
+            "can_make": can_make,
+        })
+        cur = pack_max[pack_type]
+        pack_max[pack_type] = can_make if cur is None else min(cur, can_make)
+    return inventory, recipe, {g: (v or 0) for g, v in pack_max.items()}
+
+
+def _log_movement(item, movement_type, reason, quantity, details="", username="", moved_at=None):
+    """Writes one stock-ledger row. Call it AFTER item.quantity has been
+    changed and saved, so balance_after is the new quantity on hand."""
+    if not quantity or quantity <= 0:
+        return
+    InventoryMovement.objects.create(
+        item=item,
+        movement_type=movement_type,
+        reason=reason,
+        quantity=quantity,
+        balance_after=item.quantity,
+        details=(details or "")[:255],
+        recorded_by=(username or "")[:100],
+        moved_at=moved_at or timezone.now(),
+    )
+
+
+def _inventory_history(limit=500):
+    """The most recent stock movements, newest first, for the Inventory tab."""
+    reason_labels = dict(InventoryMovement.REASONS)
+    rows = []
+    for mv in InventoryMovement.objects.select_related("item")[:limit]:
+        rows.append({
+            "id": mv.id,
+            "date": _format_ph(mv.moved_at, "%b %d, %Y"),
+            "time": _format_ph(mv.moved_at, "%I:%M %p"),
+            "item": mv.item.get_goods_type_display(),
+            "unit": mv.item.unit,
+            "direction": mv.movement_type,
+            "reason": mv.reason,
+            "reason_label": reason_labels.get(mv.reason, mv.reason),
+            "quantity": mv.quantity,
+            "balance_after": mv.balance_after,
+            "details": mv.details,
+            "recorded_by": mv.recorded_by,
+        })
+    return rows
+
+
+def _stock_for_goods(goods_name, create=True, unit="pcs"):
     """Finds the storage row (ReliefStock) for a goods type, matching
     case-insensitively so "can goods" and "Can Goods" are one item. Creates
     a new row for a goods type that has never been stored before.
     Call inside transaction.atomic() so the row is locked."""
     stock = ReliefStock.objects.select_for_update().filter(goods_type__iexact=goods_name).first()
     if stock is None and create:
-        stock = ReliefStock.objects.create(goods_type=goods_name, quantity=0)
+        stock = ReliefStock.objects.create(goods_type=goods_name, quantity=0, unit=unit)
     return stock
 
 
 @csrf_exempt
 def cswd_add_donation(request):
     """Lets CSWD staff log a donation drop-off themselves from the
-    Donations tab — this is manual data entry (there's no donor-facing
-    form), so the only validation here is "did they fill in the
-    required fields", not identity/ownership checks."""
+    Donations tab. CSWD types the item name and picks the unit (pcs or kg;
+    rice is always kg); the goods go straight into the inventory
+    (ReliefStock) under that item name — a new item is created
+    automatically the first time it is donated. For an item that already
+    exists, its own unit is used."""
 
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -634,34 +898,33 @@ def cswd_add_donation(request):
         return JsonResponse({"message": "Invalid JSON body."}, status=400)
 
     donor_name = (payload.get("donor_name") or "").strip()
-    goods_type = (payload.get("goods_type") or "").strip()
+    goods_type = _clean_item_name(payload.get("goods_type"))
     quantity = payload.get("quantity")
     status = (payload.get("status") or "pending").strip()
+    unit = _clean_unit(payload.get("unit"))
+    good_for = _clean_good_for(payload.get("good_for"))
 
-    goods_name = _clean_goods_name(goods_type)
     if not donor_name or not goods_type:
-        return JsonResponse({"message": "Donor name and goods type are required."}, status=400)
-    if not goods_name:
-        return JsonResponse({"message": "Goods type must be Rice or Pack."}, status=400)
+        return JsonResponse({"message": "Donor name and item are required."}, status=400)
+    if len(goods_type) > 100:
+        return JsonResponse({"message": "Item name is too long (100 characters max)."}, status=400)
+    if goods_type.lower() in PACK_TYPES:
+        return JsonResponse({"message": "Packs are made in the Pack Builder, not donated."}, status=400)
 
-    try:
-        quantity = int(quantity)
-        if quantity < 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        return JsonResponse({"message": "Quantity must be a non-negative number."}, status=400)
+    quantity = _whole_quantity(quantity)
+    if quantity is None:
+        return JsonResponse({"message": "Enter a quantity of at least 1 whole unit before logging a donation."}, status=400)
 
     valid_statuses = dict(Donation.STATUS_CHOICES)
     if status not in valid_statuses:
         return JsonResponse({"message": f"Status must be one of: {', '.join(valid_statuses)}."}, status=400)
 
     donation_date_raw = payload.get("donation_date")  # expects "YYYY-MM-DD" from the <input type="date">
-    if donation_date_raw:
-        donation_date = parse_date(donation_date_raw)
-        if not donation_date:
-            return JsonResponse({"message": "Donation date must be in YYYY-MM-DD format."}, status=400)
-    else:
-        donation_date = timezone.now().date()
+    if not donation_date_raw:
+        return JsonResponse({"message": "Choose the donation date before saving."}, status=400)
+    donation_date = parse_date(donation_date_raw) if isinstance(donation_date_raw, str) else None
+    if not donation_date:
+        return JsonResponse({"message": "Donation date must be in YYYY-MM-DD format."}, status=400)
 
     disaster_type = None
     disaster_type_id = payload.get("disaster_type_id")
@@ -671,41 +934,77 @@ def cswd_add_donation(request):
         if not disaster_type:
             return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
 
-    # Goods that are logged here go straight into storage (ReliefStock)
-    # under the goods type that was typed, unless the donation is already
+    # Goods that are logged here go straight into the inventory under the
+    # item name that was typed, unless the donation is already
     # "distributed" (it has left storage) or has no quantity.
-    stock = None
-    stored = status != "distributed" and quantity > 0
+    # FIX: only a donation that is actually "received" is added to usable
+    # inventory. A "pending" donation is recorded but NOT counted until it is
+    # marked received (see cswd_finance_receive_donation); "distributed" has
+    # already left storage and is never counted.
+    stored = status == "received" and quantity > 0
+    existing = ReliefStock.objects.filter(goods_type__iexact=goods_type).first()
 
+    if existing:
+        if not _good_for(existing) and not good_for:
+            return JsonResponse({"message": "Choose which relief pack the donated item is good for."}, status=400)
+        # Existing item: its own unit wins. Reject a clashing unit
+        # rather than silently adding kg to a pcs count.
+        goods_name = existing.goods_type
+        unit = existing.unit
+        if payload.get("unit") and _clean_unit(payload.get("unit")) != existing.unit:
+            return JsonResponse({
+                "message": f"\"{goods_name}\" is counted in {existing.unit} in the inventory, not {_clean_unit(payload.get('unit'))}.",
+            }, status=400)
+    else:
+        goods_name = goods_type.lower()
+        if unit not in ("pcs", "kg"):
+            return JsonResponse({"message": "Choose pieces (pcs) or kg as the unit."}, status=400)
+        if goods_name == "rice":
+            unit = "kg"
+            good_for = good_for or "rice pack"
+        if not good_for:
+            return JsonResponse({"message": "Choose which pack this item is good for (rice, food, medicine or water pack)."}, status=400)
+
+    stock = None
     with transaction.atomic():
         donation = Donation.objects.create(
             donor_name=donor_name,
             contact_num=(payload.get("contact_num") or "").strip(),
             goods_type=goods_name,
             quantity=quantity,
+            unit=unit,
             donation_date=donation_date,
             status=status,
             disaster_type=disaster_type,
+            stock_counted=stored,
         )
 
+        # The item is created in the inventory even for a donation that
+        # is not stored yet, so it shows up in the Pack Builder's lists.
+        stock = _stock_for_goods(goods_name, unit=unit)
+        if good_for and not _good_for(stock):
+            stock.category = good_for
         if stored:
-            stock = _stock_for_goods(goods_name)
             stock.quantity += quantity
-            stock.save()
+        stock.save()
+        if stored:
+            _log_movement(
+                stock, "in", "donation", quantity,
+                f"Donation from {donor_name} (received {donation_date.strftime('%b %d, %Y')})",
+                payload.get("username"),
+            )
 
     return JsonResponse({
         "success": True,
         "stored_in_inventory": stored,
-        "stock": (
-            {"goods_type": stock.goods_type, "label": stock.get_goods_type_display(), "quantity": stock.quantity}
-            if stock else None
-        ),
+        "stock": _stock_payload(stock),
         "donation": {
             "id": donation.id,
             "donor_name": donation.donor_name,
             "contact_num": donation.contact_num,
             "goods_type": donation.goods_type,
             "quantity": donation.quantity,
+            "unit": donation.unit,
             "donation_date": donation.donation_date.strftime("%b %d, %Y"),
             "status": donation.status,
             "disaster_type": disaster_type.disaster_type_name if disaster_type else "",
@@ -731,26 +1030,289 @@ def cswd_add_relief_stock(request):
     except json.JSONDecodeError:
         return JsonResponse({"message": "Invalid JSON body."}, status=400)
 
-    goods_type = _clean_goods_name(payload.get("goods_type"))
+    goods_type = _inventory_item_name(payload.get("goods_type"))
     if not goods_type:
-        return JsonResponse({"message": "Goods type must be Rice or Pack."}, status=400)
+        return JsonResponse({"message": "Select an item that is in the inventory."}, status=400)
 
-    try:
-        quantity = int(payload.get("quantity"))
-        if quantity <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+    quantity = _whole_quantity(payload.get("quantity"))
+    if quantity is None:
+        return JsonResponse({"message": "Quantity must be a positive whole number."}, status=400)
 
     with transaction.atomic():
-        stock = _stock_for_goods(goods_type)
+        stock = _stock_for_goods(goods_type, create=False)
         stock.quantity += quantity
         stock.save()
+        _log_movement(stock, "in", "restock", quantity, "Restocked by CSWD", payload.get("username"))
 
-    return JsonResponse({
-        "success": True,
-        "stock": {"goods_type": stock.goods_type, "label": stock.get_goods_type_display(), "quantity": stock.quantity},
-    })
+    return JsonResponse({"success": True, "stock": _stock_payload(stock)})
+
+
+@csrf_exempt
+def cswd_add_inventory_item(request):
+    """POST {name, unit, good_for, quantity?}: CSWD adds a NEW item to the inventory
+    (e.g. rice / kg, canned sardines / pcs, noodles / pcs, water bottle /
+    pcs), optionally with a starting quantity."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    name = _clean_item_name(payload.get("name"))
+    unit = _clean_unit(payload.get("unit"))
+    good_for = _clean_good_for(payload.get("good_for"))
+    if name.lower() == "rice":
+        good_for = good_for or "rice pack"
+    if not name or not unit:
+        return JsonResponse({"success": False, "message": "Item name and unit are required."}, status=400)
+    if not good_for:
+        return JsonResponse({"success": False, "message": "Choose which pack this item is good for (rice, food, medicine or water pack)."}, status=400)
+    if name.lower() in PACK_TYPES:
+        return JsonResponse({"success": False, "message": "That name is reserved for a pack type."}, status=400)
+    if name.lower() == "rice" and unit != "kg":
+        return JsonResponse({"success": False, "message": "Rice is counted in kg only."}, status=400)
+    if len(name) > 100:
+        return JsonResponse({"success": False, "message": "Item name is too long (100 characters max)."}, status=400)
+
+    quantity = _whole_quantity(payload.get("quantity") or 0, allow_zero=True)
+    if quantity is None:
+        return JsonResponse({"success": False, "message": "Starting quantity must be a non-negative whole number."}, status=400)
+
+    with transaction.atomic():
+        if ReliefStock.objects.filter(goods_type__iexact=name).exists():
+            return JsonResponse({"success": False, "message": f"\"{name}\" is already in the inventory."}, status=409)
+        stock = ReliefStock.objects.create(goods_type=name.lower(), unit=unit, quantity=quantity, category=good_for)
+        _log_movement(stock, "in", "initial", quantity, "Starting quantity when the item was added", payload.get("username"))
+
+    return JsonResponse({"success": True, "item": _stock_payload(stock)}, status=201)
+
+
+@csrf_exempt
+def cswd_set_item_good_for(request):
+    """POST {item_id, good_for}: change which pack an inventory item is
+    good for (rice / canned goods / food / medicine / water pack)."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    item = ReliefStock.objects.filter(id=payload.get("item_id") or 0).first()
+    if not item:
+        return JsonResponse({"success": False, "message": "That inventory item was not found."}, status=404)
+    if item.goods_type.lower() in PACK_TYPES:
+        return JsonResponse({"success": False, "message": "A pack itself has no \"good for\" setting."}, status=400)
+
+    good_for = _clean_good_for(payload.get("good_for"))
+    if not good_for:
+        return JsonResponse({"success": False, "message": "Choose a pack."}, status=400)
+
+    item.category = good_for
+    item.save(update_fields=["category"])
+    return JsonResponse({"success": True, "item": _stock_payload(item)})
+
+
+@csrf_exempt
+def cswd_pack_item_set(request):
+    """POST {item_id, pack_type, quantity_per_pack}: put an inventory item
+    into the recipe of a pack (rice / canned goods / food / medicine / water pack), or
+    change how much of it goes into one pack. An item belongs to one pack
+    at a time. POST {item_id, remove: true}: take it out of its pack."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    item = ReliefStock.objects.filter(id=payload.get("item_id") or 0).first()
+    if not item:
+        return JsonResponse({"success": False, "message": "That inventory item was not found."}, status=404)
+    if item.goods_type.lower() in PACK_TYPES:
+        return JsonResponse({"success": False, "message": "A pack can't be packed into another pack."}, status=400)
+
+    if payload.get("remove"):
+        PackComponent.objects.filter(item=item).delete()
+        return JsonResponse({"success": True})
+
+    pack_type = _clean_good_for(payload.get("pack_type"))
+    if not pack_type:
+        return JsonResponse({"success": False, "message": "Choose which pack this item goes into."}, status=400)
+
+    existing = PackComponent.objects.filter(item=item).first()
+    if existing and _component_pack_type(existing) != pack_type:
+        return JsonResponse({
+            "success": False,
+            "message": f"{item.get_goods_type_display()} is already in the {_component_pack_type(existing)}. Remove it from there first.",
+        }, status=400)
+
+    per_pack = _whole_quantity(payload.get("quantity_per_pack"))
+    if per_pack is None:
+        return JsonResponse({"success": False, "message": "Quantity per pack must be a positive whole number."}, status=400)
+
+    if item.goods_type.lower() == "rice" and per_pack > RICE_MAX_PER_PACK:
+        return JsonResponse({"success": False, "message": f"A pack can hold at most {RICE_MAX_PER_PACK} kg of rice."}, status=400)
+
+    PackComponent.objects.update_or_create(item=item, defaults={"quantity_per_pack": per_pack, "pack_type": pack_type})
+    return JsonResponse({"success": True})
+
+
+@csrf_exempt
+def cswd_assemble_packs(request):
+    """POST {pack_type, packs}: make N packs of one pack type (rice / food /
+    medicine / water pack) from that pack type's recipe. Deducts
+    quantity_per_pack x N of every recipe item of that type from storage
+    and adds N to the pack type's stock, all or nothing — if any item is
+    short, nothing changes and the message says which."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    pack_type = _clean_good_for(payload.get("pack_type"))
+    if not pack_type:
+        return JsonResponse({"success": False, "message": "Choose which pack to make: rice, food, medicine or water pack."}, status=400)
+
+    packs = _whole_quantity(payload.get("packs"))
+    if packs is None:
+        return JsonResponse({"success": False, "message": "Number of packs must be a positive whole number."}, status=400)
+
+    with transaction.atomic():
+        components = [
+            c for c in PackComponent.objects.select_for_update().select_related("item")
+            if _component_pack_type(c) == pack_type
+        ]
+        if not components:
+            return JsonResponse({"success": False, "message": f"Add at least one item to the {pack_type} first."}, status=400)
+
+        locked = {
+            s.id: s
+            for s in ReliefStock.objects.select_for_update().filter(id__in=[c.item_id for c in components])
+        }
+        short = []
+        for c in components:
+            need = c.quantity_per_pack * packs
+            have = locked[c.item_id].quantity
+            if have < need:
+                short.append(f"{c.item.get_goods_type_display()} (need {need} {c.item.unit}, have {have})")
+        if short:
+            return JsonResponse({
+                "success": False,
+                "message": f"Not enough in storage for {packs} {pack_type}(s): " + ", ".join(short) + ".",
+            }, status=400)
+
+        for c in components:
+            stock = locked[c.item_id]
+            stock.quantity -= c.quantity_per_pack * packs
+            stock.save()
+            _log_movement(stock, "out", "packed", c.quantity_per_pack * packs,
+                          f"Used to make {packs} {pack_type}{'' if packs == 1 else 's'}", payload.get("username"))
+
+        _ensure_builtin_stock()
+        pack_stock = _stock_for_goods(pack_type, unit=DEFAULT_UNITS[pack_type])
+        pack_stock.quantity += packs
+        pack_stock.save()
+        _log_movement(pack_stock, "in", "pack_made", packs,
+                      f"Assembled from inventory items", payload.get("username"))
+
+    return JsonResponse({"success": True, "packs": packs, "pack_stock": _stock_payload(pack_stock)})
+
+
+@csrf_exempt
+def cswd_manual_pack(request):
+    """POST {pack_type, packs, items: [{item_id, quantity_per_pack}, ...]}:
+    CSWD packs inventory items by hand into N packs of one pack type. Nothing is saved as a recipe: it
+    deducts quantity_per_pack x N of each item from storage and adds N to
+    that pack type's stock, all or nothing — if any item is short, nothing
+    changes and the message says which."""
+
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if request.method != "POST":
+        return JsonResponse({"message": "POST required."}, status=405)
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"message": "Invalid JSON body."}, status=400)
+
+    pack_type = _clean_good_for(payload.get("pack_type"))
+    if not pack_type:
+        return JsonResponse({"success": False, "message": "Choose a rice, food, medicine or water pack."}, status=400)
+
+    packs = _whole_quantity(payload.get("packs"))
+    if packs is None:
+        return JsonResponse({"success": False, "message": "Number of packs must be a positive whole number."}, status=400)
+
+    wanted = {}  # item id -> quantity per pack
+    for row in payload.get("items") or []:
+        try:
+            item_id = int(row.get("item_id"))
+            per_pack = _whole_quantity(row.get("quantity_per_pack"))
+            if item_id <= 0 or per_pack is None:
+                raise ValueError
+        except (TypeError, ValueError, AttributeError):
+            return JsonResponse({"success": False, "message": "Every item needs a quantity of 1 or more."}, status=400)
+        wanted[item_id] = wanted.get(item_id, 0) + per_pack
+    if not wanted:
+        return JsonResponse({"success": False, "message": "Add at least one item to pack."}, status=400)
+
+    with transaction.atomic():
+        _ensure_builtin_stock()
+        locked = {s.id: s for s in ReliefStock.objects.select_for_update().filter(id__in=wanted.keys())}
+        if len(locked) != len(wanted):
+            return JsonResponse({"success": False, "message": "One of the items was not found in the inventory."}, status=404)
+
+        short = []
+        for item_id, per_pack in wanted.items():
+            stock = locked[item_id]
+            if stock.goods_type.lower() in PACK_TYPES:
+                return JsonResponse({"success": False, "message": "A pack can't be packed into another pack."}, status=400)
+            if stock.goods_type.lower() == "rice" and per_pack > RICE_MAX_PER_PACK:
+                return JsonResponse({"success": False, "message": f"A pack can hold at most {RICE_MAX_PER_PACK} kg of rice."}, status=400)
+            need = per_pack * packs
+            if stock.quantity < need:
+                short.append(f"{stock.get_goods_type_display()} (need {need} {stock.unit}, have {stock.quantity})")
+        if short:
+            return JsonResponse({
+                "success": False,
+                "message": f"Not enough in storage for {packs} {pack_type}(s): " + ", ".join(short) + ".",
+            }, status=400)
+
+        for item_id, per_pack in wanted.items():
+            stock = locked[item_id]
+            stock.quantity -= per_pack * packs
+            stock.save()
+            _log_movement(stock, "out", "packed", per_pack * packs,
+                          f"Used to make {packs} {pack_type}{'' if packs == 1 else 's'}", payload.get("username"))
+
+        pack_stock = _stock_for_goods(pack_type, unit=DEFAULT_UNITS[pack_type])
+        pack_stock.quantity += packs
+        pack_stock.save()
+        _log_movement(pack_stock, "in", "pack_made", packs,
+                      f"Assembled from inventory items", payload.get("username"))
+
+    return JsonResponse({"success": True, "packs": packs, "pack_stock": _stock_payload(pack_stock)})
 
 
 @csrf_exempt
@@ -782,26 +1344,30 @@ def cswd_record_relief(request):
     username = (payload.get("username") or "").strip()
 
     if not barangay_obj or not goods_type:
-        return JsonResponse({"message": "Barangay and goods type (Rice or Pack) are required."}, status=400)
+        return JsonResponse({"message": "Select a valid barangay and an assembled relief pack before releasing goods."}, status=400)
+    if not remarks:
+        return JsonResponse({"message": "Remarks / reason is required before a relief release can be recorded."}, status=400)
+    if len(remarks) > 255:
+        return JsonResponse({"message": "Remarks must be 255 characters or fewer."}, status=400)
 
-    try:
-        quantity = int(payload.get("quantity"))
-        if quantity <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+    quantity = _whole_quantity(payload.get("quantity"))
+    if quantity is None:
+        return JsonResponse({"message": "Quantity must be a positive whole number."}, status=400)
 
-    # Evacuation center the goods go to: the one picked in the form, or —
-    # if the barangay has exactly one — that one automatically.
+    # Every release has an explicitly selected destination. For a barangay
+    # with no registered evacuation center, the operator chooses the
+    # Barangay-wide destination in the CSWD form.
     center = None
-    center_id = payload.get("evacuation_center_id")
+    center_id = str(payload.get("evacuation_center_id") or "").strip()
     barangay_centers = EvacuationCenter.objects.filter(barangay__iexact=barangay)
-    if center_id:
-        center = barangay_centers.filter(id=center_id).first()
-        if not center:
+    if barangay_centers.exists():
+        if not center_id.isdigit():
+            return JsonResponse({"message": "Select the evacuation center that will receive the packs."}, status=400)
+        center = barangay_centers.filter(id=int(center_id)).first()
+        if center is None:
             return JsonResponse({"message": f"That evacuation center is not in {barangay}."}, status=400)
-    elif barangay_centers.count() == 1:
-        center = barangay_centers.first()
+    elif center_id != "barangay-wide":
+        return JsonResponse({"message": "Select Barangay-wide as the destination (no evacuation center is registered)."}, status=400)
 
     # How many households this release covers: those currently inside the
     # evacuation center, or all confirmed households of the barangay when
@@ -813,12 +1379,15 @@ def cswd_record_relief(request):
             registration_complete=True, status="confirmed", barangay__iexact=barangay
         ).count()
 
+    # An explicit purpose is mandatory. "general" represents a real
+    # operator selection, and maps to NULL in the existing disaster FK.
     disaster_type = None
-    disaster_type_id = payload.get("disaster_type_id")
-    if disaster_type_id:
-        from .models import DisasterType
-        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
-        if not disaster_type:
+    disaster_type_id = str(payload.get("disaster_type_id") or "").strip()
+    if disaster_type_id != "general":
+        if not disaster_type_id.isdigit():
+            return JsonResponse({"message": "Select a release purpose or disaster type."}, status=400)
+        disaster_type = DisasterType.objects.filter(id=int(disaster_type_id)).first()
+        if disaster_type is None:
             return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
 
     try:
@@ -827,11 +1396,20 @@ def cswd_record_relief(request):
             if not stock or stock.quantity < quantity:
                 left = stock.quantity if stock else 0
                 return JsonResponse({
-                    "message": f"Not enough {goods_type} left in storage (only {left} left).",
+                    "message": f"Not enough assembled {goods_type} in Inventory (only {left} packs left).",
                 }, status=400)
 
-            stock.quantity -= quantity
-            stock.save()
+            # A conditional update prevents two overlapping requests from
+            # spending the same finished packs, even if row-level locks are
+            # unavailable on the configured database backend.
+            changed = ReliefStock.objects.filter(
+                pk=stock.pk, quantity__gte=quantity
+            ).update(quantity=F("quantity") - quantity)
+            if changed != 1:
+                return JsonResponse({
+                    "message": f"{goods_type} stock changed while releasing. Refresh Inventory and try again.",
+                }, status=409)
+            stock.refresh_from_db(fields=["quantity"])
 
             relief = ReliefDistribution.objects.create(
                 household=None,
@@ -843,6 +1421,11 @@ def cswd_record_relief(request):
                 quantity_given=quantity,
                 distributed_by=username,
                 remarks=remarks,
+            )
+            _log_movement(
+                stock, "out", "released", quantity,
+                f"Released to {barangay}" + (f" — {center.name}" if center else "") + f" (Tracking {relief.tracking_number})",
+                username,
             )
     except Exception as exc:
         return JsonResponse({"message": f"Could not record this relief release: {exc}"}, status=400)
@@ -865,12 +1448,35 @@ def cswd_record_relief(request):
     })
 
 
+def _barangay_legacy_canned_balance(barangay_obj):
+    """Remaining OLD canned-only packs that arrived at this barangay.
+
+    This is informational only. Never add these to the Food Pack total,
+    because the physical goods in an older canned-only pack may differ.
+    """
+    if barangay_obj is None:
+        return 0
+    received = (ReliefDistribution.objects.filter(
+        barangay=barangay_obj, household__isnull=True,
+        claim_status="claimed", goods_type__iexact="canned goods pack"
+    ).aggregate(total=Sum("quantity_given"))["total"] or 0)
+    distributed = (ReliefDistribution.objects.filter(
+        barangay=barangay_obj, household__isnull=False,
+        goods_type__iexact="canned goods pack"
+    ).exclude(claim_status="cancelled").aggregate(total=Sum("quantity_given"))["total"] or 0)
+    return max(0, received - distributed)
+
+
 def _barangay_relief_pool(barangay_obj):
     """Relief goods a barangay can still give to households, per goods
     type: everything CSWD released to it that has been marked Received,
     minus what it already handed out to households (cancelled ignored)."""
 
-    pool = {g: 0 for g in GOODS_TYPES}
+    # Only the four actively assembled pack types can be distributed. Keep
+    # the old canned-pack ledger entries untouched, but do not count them as
+    # Food Packs: older canned-only packs were not assembled with the same
+    # ingredients as current Food Packs.
+    pool = {g: 0 for g in CURRENT_PACK_TYPES}
     received = (
         ReliefDistribution.objects
         .filter(barangay=barangay_obj, household__isnull=True, claim_status="claimed")
@@ -926,18 +1532,21 @@ def barangay_record_relief(request):
     remarks = (payload.get("remarks") or "").strip()
 
     if not household_code or not goods_type:
-        return JsonResponse({"message": "Household and goods type (Rice or Pack) are required."}, status=400)
+        return JsonResponse({"message": "Select a household and a rice, food, medicine, or water pack."}, status=400)
+    if not remarks:
+        return JsonResponse({"message": "Enter remarks before recording relief for this household."}, status=400)
+    if len(remarks) > 255:
+        return JsonResponse({"message": "Remarks must be 255 characters or fewer."}, status=400)
 
-    try:
-        quantity = int(payload.get("quantity"))
-        if quantity <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        return JsonResponse({"message": "Quantity must be a positive number."}, status=400)
+    quantity = _whole_quantity(payload.get("quantity"))
+    if quantity is None:
+        return JsonResponse({"message": "Quantity must be a positive whole number."}, status=400)
 
     household = Household.objects.filter(household_code=household_code).first()
-    if not household:
-        return JsonResponse({"message": "Selected household was not found."}, status=400)
+    if (not household or not household.registration_complete
+            or household.barangay.strip().lower() != valid_barangay.lower()
+            or household.status != "confirmed"):
+        return JsonResponse({"message": "Select a confirmed household registered in your barangay."}, status=400)
 
     # The household must currently be checked in at this barangay's center.
     attendance = (
@@ -953,12 +1562,16 @@ def barangay_record_relief(request):
             "message": f"{household.full_name}'s household is not checked in at an evacuation center in {valid_barangay}.",
         }, status=400)
 
+    # The operator must deliberately select General Relief or a disaster.
+    # General maps to the existing nullable FK; no schema change is needed.
     disaster_type = None
-    disaster_type_id = payload.get("disaster_type_id")
-    if disaster_type_id:
-        disaster_type = DisasterType.objects.filter(id=disaster_type_id).first()
-        if not disaster_type:
-            return JsonResponse({"message": "Selected disaster type was not found."}, status=400)
+    disaster_type_id = str(payload.get("disaster_type_id") or "").strip()
+    if disaster_type_id != "general":
+        if not disaster_type_id.isdigit():
+            return JsonResponse({"message": "Select General Relief or a disaster type."}, status=400)
+        disaster_type = DisasterType.objects.filter(id=int(disaster_type_id), status="active").first()
+        if disaster_type is None:
+            return JsonResponse({"message": "Selected active disaster type was not found."}, status=400)
 
     with transaction.atomic():
         # Lock this barangay's batches so two staff can't both spend the
@@ -1065,6 +1678,16 @@ def barangay_update_relief_status(request):
 
         if new_status == relief.claim_status:
             return JsonResponse({"message": "Release is already in that status."}, status=400)
+
+        # A household distribution must be prepared before it is marked
+        # received; a CSWD -> Barangay batch is received directly when it arrives.
+        if relief.household_id is not None:
+            current = "processing" if relief.claim_status == "pending" else relief.claim_status
+            expected = {"processing": "ready", "ready": "claimed"}.get(current)
+            if new_status != expected:
+                return JsonResponse({
+                    "message": "Complete the relief steps in order: Processing, Ready for Pickup, then Received.",
+                }, status=400)
 
         relief.claim_status = new_status
         relief.status_updated_by = username
@@ -2289,21 +2912,53 @@ def barangay_dashboard(request):
         }
         for r in hh_relief_qs
     ]
+    # This is a separate, complete check of relief issued to the households
+    # *currently present*. The table above shows just the latest 100 rows,
+    # but using that truncated list to decide who is still waiting causes
+    # older recipients to incorrectly re-enter the priority queue.
+    present_codes = {
+        h["household_code"] for center in centers_payload for h in center["households"]
+    }
     relief_by_household = {}
-    for r in hh_relief_qs:
-        relief_by_household.setdefault(r.household.household_code, []).append(r)
-    for c in centers_payload:
-        for h in c["households"]:
+    if present_codes:
+        for relief in (
+            ReliefDistribution.objects
+            .filter(
+                household__household_code__in=present_codes,
+                barangay__barangay_name__iexact=valid_barangay,
+            )
+            .exclude(claim_status="cancelled")
+            .select_related("household")
+            .order_by("-distribution_date", "-id")
+        ):
+            relief_by_household.setdefault(relief.household.household_code, []).append(relief)
+
+    for center in centers_payload:
+        for h in center["households"]:
             recs = relief_by_household.get(h["household_code"], [])
-            if any(r.claim_status == "ready" for r in recs):
+            # An open allocation takes precedence over earlier receipts.
+            # Expose the actual open release so the Barangay priority queue
+            # can use the existing status-change endpoint (no new API).
+            ready_release = next((r for r in recs if r.claim_status == "ready"), None)
+            processing_release = next((r for r in recs if r.claim_status in ("processing", "pending")), None)
+            active_release = ready_release or processing_release
+            if ready_release:
                 h["relief_status"] = "Ready for Pickup"
-            elif any(r.claim_status in ("processing", "pending") for r in recs):
+            elif processing_release:
                 h["relief_status"] = "Processing"
-            elif recs:
+            elif any(r.claim_status == "claimed" for r in recs):
                 h["relief_status"] = "Relief Given"
             else:
                 h["relief_status"] = "Not Yet Given"
-            last = recs[0] if recs else None
+            h["active_relief"] = (
+                {
+                    "id": active_release.id,
+                    "tracking_number": active_release.tracking_number,
+                    "claim_status": active_release.claim_status,
+                }
+                if active_release else None
+            )
+            last = active_release or (recs[0] if recs else None)
             h["relief_last"] = (
                 f"{last.quantity_given}x {last.get_goods_type_display()} · {_format_ph(last.distribution_date, '%b %d, %Y')}"
                 if last else ""
@@ -2388,7 +3043,11 @@ def barangay_dashboard(request):
         "households_in_evacuation": sum(c["households_in_center"] for c in centers_payload),
         "relief_releases": relief_releases,
         "household_relief": household_relief,
-        "relief_pool": _barangay_relief_pool(barangay_row) if barangay_row else {g: 0 for g in GOODS_TYPES},
+        "relief_pool": _barangay_relief_pool(barangay_row) if barangay_row else {g: 0 for g in CURRENT_PACK_TYPES},
+        # Legacy canned-only batches remain stored in historical records;
+        # expose their unspent balance separately so it is never silently
+        # turned into (or double-counted as) the modern Food Pack.
+        "legacy_canned_balance": _barangay_legacy_canned_balance(barangay_row) if barangay_row else 0,
         "disaster_types": [
             {"id": dt.id, "name": dt.disaster_type_name, "status": dt.status}
             for dt in DisasterType.objects.filter(status="active").order_by("-start_date", "disaster_type_name")
@@ -3186,6 +3845,12 @@ def resident_dashboard(request):
         if recommended:
             c = recommended["center"]
             nearest_center = {
+                # distance_km / walk_minutes are the DRRM Dijkstra GRAPH
+                # estimate from the household's SAVED location (or barangay
+                # centroid), not live-GPS road distance. The map screen shows
+                # mapped-road distance from live GPS; the two can differ.
+                "distance_basis": "graph_estimate",
+                "start_source": _source,
                 "id": c["id"],
                 "name": c["name"],
                 "distance_km": recommended["distance_km"],
@@ -3201,8 +3866,9 @@ def resident_dashboard(request):
         # screen still has something sensible to show.
         nearest_center = {
             "name": "Tibanga Gymnasium",
-            "distance_km": 0.8,
-            "walk_minutes": 10,
+            "distance_km": None,  # no route computed: do not invent a distance
+            "walk_minutes": None,
+            "distance_basis": "unavailable",
             "status": "open",
             "occupancy": 87,
             "capacity": 300,
@@ -3929,9 +4595,9 @@ def sec_relief(hh_qs, disaster_id=None, title="Relief Distribution", recent=25):
 
 
 def sec_stock():
-    rows = [[s.get_goods_type_display(), s.quantity, _format_ph(s.updated_at)] for s in ReliefStock.objects.all()]
+    rows = [[s.get_goods_type_display(), s.unit, s.quantity, _format_ph(s.updated_at)] for s in ReliefStock.objects.all()]
     return _section("Relief Goods Storage (current stock)",
-                    _table(["Goods type", "Quantity on hand", "Last updated"], rows, [.4, .3, .3], "No stock recorded."))
+                    _table(["Goods type", "Unit", "Quantity on hand", "Last updated"], rows, [.34, .14, .26, .26], "No stock recorded."))
 
 
 def sec_donations(disaster_id=None, recent=20):
@@ -3940,7 +4606,7 @@ def sec_donations(disaster_id=None, recent=20):
         qs = qs.filter(disaster_type_id=disaster_id)
     by_status = [[dict(Donation.STATUS_CHOICES).get(r["status"], r["status"]), r["n"], r["q"] or 0]
                  for r in qs.values("status").annotate(n=Count("id"), q=Sum("quantity")).order_by("status")]
-    last = [[d.donor_name, d.goods_type, d.quantity, d.donation_date.strftime("%b %d, %Y") if d.donation_date else "-",
+    last = [[d.donor_name, d.goods_type, f"{d.quantity} {d.unit}", d.donation_date.strftime("%b %d, %Y") if d.donation_date else "-",
              d.get_status_display(), d.disaster_type.disaster_type_name if d.disaster_type else "-"]
             for d in qs[:recent]]
     return _section(

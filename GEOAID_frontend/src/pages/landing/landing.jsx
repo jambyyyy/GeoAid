@@ -250,14 +250,14 @@ const servesRoles = [
   },
   {
     icon: "shield",
-    badge: "Mobile App",
+    badge: "Web Dashboard",
     title: "Purok Presidents",
     desc: "Review and verify household registrations from their purok before forwarding to Barangay.",
     className: "role-blue",
   },
   {
     icon: "building",
-    badge: "Web Dashboard",
+    badge: "Mobile App/Web Dashboard",
     title: "Barangay Staff",
     desc: "Final registration approval, QR scanner for evacuee check-in/out, relief distribution management.",
     className: "role-purple",

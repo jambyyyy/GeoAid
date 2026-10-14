@@ -60,7 +60,7 @@ function BottomNav({ active, onSelect }) {
                   color={
                     isActive
                       ? "#2563eb"
-                      : "#9aa3af"
+                      : "#64748b"
                   }
                 />
               </View>
@@ -90,11 +90,13 @@ const styles = StyleSheet.create({
     borderTopColor: "#e5e7eb",
 
     flexShrink: 0,
+    alignSelf: "stretch",
   },
 
   bar: {
     width: "100%",
     height: 62,
+    flexShrink: 0,
 
     flexDirection: "row",
     alignItems: "center",
@@ -105,7 +107,7 @@ const styles = StyleSheet.create({
 
   tab: {
     flex: 1,
-    height: "100%",
+    height: 58,
 
     alignItems: "center",
     justifyContent: "center",
@@ -122,9 +124,9 @@ const styles = StyleSheet.create({
     marginTop: 3,
 
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 18,
 
-    color: "#9aa3af",
+    color: "#526176",
 
     textAlign: "center",
   },

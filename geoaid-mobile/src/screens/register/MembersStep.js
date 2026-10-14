@@ -1,6 +1,7 @@
+import { mergeResidentStyles } from "../../residentPolish";
 import { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from "react-native";
-import { Picker } from "@react-native-picker/picker";
+import SelectField from "../../components/SelectField";
 import { PlusIcon, ArrowRightIcon } from "../../components/icons";
 
 const RELATIONS = ["Head", "Spouse", "Child", "Parent", "Sibling", "Grandchild", "Other"];
@@ -107,13 +108,12 @@ function MembersStep({ headName, initialValue, onContinue, onBack }) {
               </View>
               <View style={styles.rowField}>
                 <Text style={styles.label}>Relation</Text>
-                <View style={styles.pickerWrap}>
-                  <Picker selectedValue={m.relation} onValueChange={(v) => updateMember(m.id, "relation", v)}>
-                    {RELATIONS.map((r) => (
-                      <Picker.Item key={r} label={r === "Head" ? "Head of Household" : r} value={r} />
-                    ))}
-                  </Picker>
-                </View>
+                <SelectField
+                  value={m.relation}
+                  onChange={(v) => updateMember(m.id, "relation", v)}
+                  options={RELATIONS}
+                  placeholder="Select relationship"
+                />
               </View>
             </View>
           </View>
@@ -138,7 +138,7 @@ function MembersStep({ headName, initialValue, onContinue, onBack }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   form: { paddingBottom: 32 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -179,6 +179,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   continueBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
-});
+}, "members"));
 
 export default MembersStep;

@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { View, Text, StyleSheet } from "react-native";
 
 export const STEPS = ["Account", "Household", "Members", "Vulnerability"];
@@ -21,7 +22,7 @@ function StepProgress({ currentIndex }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   row: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12 },
   stepWrap: { flexDirection: "row", alignItems: "center", flex: 1 },
   dot: {
@@ -38,6 +39,6 @@ const styles = StyleSheet.create({
   dotTextActive: { color: "#fff" },
   line: { flex: 1, height: 2, backgroundColor: "#e5e7eb", marginHorizontal: 4 },
   lineDone: { backgroundColor: "#16a34a" },
-});
+}, "progress"));
 
 export default StepProgress;

@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -205,7 +206,7 @@ function RegistrationStatusScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   header: {
@@ -317,6 +318,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   continueBtnText: { color: "#fff", fontWeight: "600", fontSize: 14 },
-});
+}, "registrationStatus"));
 
 export default RegistrationStatusScreen;

@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Linking, Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -11,8 +12,8 @@ function EmergencyContactsScreen({ navigation }) {
 
   useEffect(() => {
     const fetchContacts = async () => {
-      const mobileNumber = await AsyncStorage.getItem("geoaid_resident_mobile");
-      
+      const mobileNumber = (await AsyncStorage.getItem("geoaid_resident_mobile")) || "";
+
       try {
         const response = await fetch(
           `${API_BASE}/api/resident/emergency-contacts/?mobile_number=${encodeURIComponent(mobileNumber)}`
@@ -36,17 +37,11 @@ function EmergencyContactsScreen({ navigation }) {
     fetchContacts();
   }, []);
 
-  const getDefaultContacts = () => [
-    { name: "Barangay Hall", phone: "N/A", type: "barangay" },
-    { name: "Purok President", phone: "N/A", type: "purok" },
-    { name: "Police Station", phone: "911", type: "emergency" },
-    { name: "Fire Department", phone: "911", type: "emergency" },
-    { name: "Hospital Emergency", phone: "911", type: "emergency" },
-    { name: "CDRRMO", phone: "N/A", type: "government" },
-  ];
+  // No built-in numbers: every contact comes from what DRRM saved in Django.
+  const getDefaultContacts = () => [];
 
   const handleCall = (phone) => {
-    if (phone === "N/A") {
+    if (!phone || phone === "N/A" || phone.startsWith("Not Available")) {
       Alert.alert("Contact Not Available", "This contact number is not available yet.");
       return;
     }
@@ -120,6 +115,9 @@ function EmergencyContactsScreen({ navigation }) {
           </View>
 
           <View style={styles.contactsList}>
+            {contacts.length === 0 && (
+              <Text style={styles.infoText}>No emergency contacts have been added by DRRM yet.</Text>
+            )}
             {contacts.map((contact, index) => (
               <TouchableOpacity
                 key={index}
@@ -154,7 +152,7 @@ function EmergencyContactsScreen({ navigation }) {
 
           <View style={styles.updateNote}>
             <Text style={styles.updateNoteText}>
-              Contact numbers are managed by your Barangay. Contact your Purok President if any information needs to be updated.
+              These numbers are managed by DRRM. If a number is missing or wrong, please report it to your Barangay or DRRM office.
             </Text>
           </View>
         </ScrollView>
@@ -163,7 +161,7 @@ function EmergencyContactsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   header: {
@@ -230,6 +228,6 @@ const styles = StyleSheet.create({
     borderColor: "#e2e8f0",
   },
   updateNoteText: { fontSize: 11, color: "#64748b", textAlign: "center", lineHeight: 15 },
-});
+}, "contacts"));
 
 export default EmergencyContactsScreen;

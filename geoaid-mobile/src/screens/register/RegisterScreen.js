@@ -1,5 +1,7 @@
+import { mergeResidentStyles } from "../../residentPolish";
 import { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import MobileShell from "../../components/MobileShell";
 import StepProgress, { STEPS } from "../../components/StepProgress";
 import { BackIcon } from "../../components/icons";
@@ -100,7 +102,7 @@ function RegisterScreen({ navigation }) {
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityLabel="Back">
             <BackIcon />
@@ -146,12 +148,12 @@ function RegisterScreen({ navigation }) {
             />
           )}
         </View>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   screen: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingTop: 8 },
   backBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e5e7eb" },
@@ -160,6 +162,6 @@ const styles = StyleSheet.create({
   body: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
-});
+}, "register"));
 
 export default RegisterScreen;

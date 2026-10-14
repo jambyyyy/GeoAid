@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../../residentPolish";
 import { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from "react-native";
 import { ShieldIcon, ArrowRightIcon } from "../../components/icons";
@@ -84,10 +85,10 @@ function AccountStep({ onContinue }) {
         <Text style={styles.mobilePrefix}>+63</Text>
         <TextInput
           style={styles.mobileInput}
-          placeholder="9xx xxx xxxx"
+          placeholder="9XXXXXXXXX"
           keyboardType="phone-pad"
           value={mobile}
-          onChangeText={setMobile}
+          onChangeText={(value) => setMobile(value.replace(/\D/g, "").replace(/^63(?=9)/, "").replace(/^0(?=9)/, "").slice(0, 10))}
           editable={!isSubmitting}
         />
       </View>
@@ -132,7 +133,7 @@ function AccountStep({ onContinue }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   form: { paddingBottom: 32 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -162,6 +163,6 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.6 },
   continueBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-});
+}, "account"));
 
 export default AccountStep;

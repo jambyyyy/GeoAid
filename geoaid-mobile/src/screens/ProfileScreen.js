@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
 
 import {
@@ -1502,7 +1503,7 @@ function ProfileScreen({ navigation }) {
 }
 
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
 
   loading: {
     flex: 1,
@@ -2093,7 +2094,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-});
-
+}, "profile"));
 
 export default ProfileScreen;

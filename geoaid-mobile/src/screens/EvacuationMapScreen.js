@@ -12,6 +12,7 @@ import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import { PinIcon, NavIconArrow } from "../components/icons";
+import { UI } from "../residentPolish";
 import { API_BASE } from "../api";
 
 // Evacuation centers on a map, for residents.
@@ -52,7 +53,11 @@ function buildMapHtml() {
   <style>
     html, body, #map { height: 100%; margin: 0; padding: 0; }
     .evac-pin { display:block; filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
-    .user-dot { width:16px; height:16px; border-radius:50%; background:#2563eb; border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+    .user-dot { width:17px; height:17px; border-radius:50%; background:#2563eb; border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.4); flex:0 0 17px; }
+    .user-location-label { display:flex; align-items:center; gap:7px; width:max-content;
+      padding:6px 10px; border:1.5px solid #bfdbfe; background:#fff; color:#1d4ed8;
+      border-radius:22px; box-shadow:0 3px 10px rgba(15,23,42,.17);
+      font:700 12px system-ui,-apple-system,sans-serif; white-space:nowrap; }
   </style>
 </head>
 <body>
@@ -77,12 +82,15 @@ function buildMapHtml() {
       iconSize: [30, 40],
       iconAnchor: [15, 40],
     });
-    const userIcon = L.divIcon({ className: "", html: '<div class="user-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+    const userIcon = L.divIcon({ className: "", html:
+      '<div class="user-location-label"><span class="user-dot"></span>My Current Location</div>',
+      iconSize: [167, 34], iconAnchor: [12, 17] });
 
     let markers = [];
     let userMarker = null;
     let routeLine = null;
     let routeStartMarker = null;
+    let routeRequestSequence = 0;
 
     function setCenters(centers) {
       markers.forEach((m) => map.removeLayer(m));
@@ -116,95 +124,117 @@ function buildMapHtml() {
       if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
     }
 
-    // OSRM's free public demo routers — same OpenStreetMap data as the
-    // map tiles, no API key. They only snap points to real roads/paths
-    // and return the geometry to follow between them; they don't know
-    // about DRRM's pinned routes, flooded roads, or risk levels —
-    // Dijkstra (routing.py, server-side) already decided *which*
-    // barangays/roads to go through, this only draws that decision as a
-    // real path instead of a straight line. Note for production: these
-    // are shared, rate-limited demo servers (~1 req/sec, no uptime
-    // guarantee) — fine for dev/thesis use, but self-host an OSRM
-    // instance before scaling up.
-    // Two hosts, tried in order: the -foot instance walks real footpaths;
-    // if it's unreachable (network hiccup, rate limit, DNS), the well-known
-    // main demo server is tried next so a route still snaps to roads
-    // (using its driving profile) instead of falling all the way back to
-    // a straight line.
-    const OSRM_HOSTS = [
-      { url: "https://routing.openstreetmap.de/routed-foot/route/v1/foot/", label: "osrm-foot" },
-      { url: "https://router.project-osrm.org/route/v1/driving/", label: "osrm-driving" },
-    ];
+    // GeoAid/Django still selects the evacuation center using the unchanged
+    // DRRM risk-weighted Dijkstra graph. The street-route service below only
+    // draws road geometry to that selected center; it does not choose it.
+    // IMPORTANT: driving roads, pedestrian paths, and DRRM graph waypoints
+    // are different things and must never be silently substituted for one another.
+    const STREET_ROUTERS = {
+      // A foot route can favor coastal shortcuts and walkways instead of
+      // the main road; use driving mode explicitly for the main-road view.
+      road: { url: "https://router.project-osrm.org/route/v1/driving/", profile: "driving" },
+      walk: { url: "https://routing.openstreetmap.de/routed-foot/route/v1/foot/", profile: "walking" },
+    };
 
-    async function fetchRoadRoute(waypoints) {
-      // OSRM wants "lng,lat;lng,lat;...", our waypoints are [lat, lng].
-      const coordsParam = waypoints.map((p) => p[1] + "," + p[0]).join(";");
-      let lastErr = null;
-      for (const host of OSRM_HOSTS) {
-        try {
-          const url = host.url + coordsParam + "?overview=full&geometries=geojson";
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(host.label + " HTTP " + res.status);
-          const data = await res.json();
-          const route = data.routes && data.routes[0];
-          if (data.code !== "Ok" || !route) throw new Error(host.label + " code=" + data.code);
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: "route_debug", ok: true, host: host.label }));
-          // GeoJSON coordinates are [lng, lat] — flip back for Leaflet.
-          return route.geometry.coordinates.map((c) => [c[1], c[0]]);
-        } catch (err) {
-          lastErr = err;
-        }
+    async function fetchStreetRoute(endpoints, mode) {
+      const router = STREET_ROUTERS[mode];
+      if (!router) throw new Error("Unsupported routing mode");
+      const coordinates = endpoints.map((p) => p[1] + "," + p[0]).join(";");
+      const url = router.url + coordinates + "?overview=full&geometries=geojson&steps=false";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(router.profile + " road server returned " + res.status);
+      const json = await res.json();
+      const route = json.routes && json.routes[0];
+      if (json.code !== "Ok" || !route || !route.geometry ||
+          !Array.isArray(route.geometry.coordinates) || route.geometry.coordinates.length < 2) {
+        throw new Error("No " + router.profile + " route on mapped streets");
       }
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: "route_debug", ok: false, error: String(lastErr) }));
-      throw lastErr || new Error("no OSRM host reachable");
+      const snaps = (json.waypoints || []).map((w) => Number(w.distance) || 0);
+      return {
+        snapsM: snaps,
+        coords: route.geometry.coordinates.map((c) => [c[1], c[0]]),
+        distanceKm: Math.round(route.distance / 10) / 100,
+        durationMin: Math.max(1, Math.round(route.duration / 60)),
+        profile: router.profile,
+      };
     }
 
-    // Draws the Dijkstra route returned by /api/resident/evacuation/
-    // nearest-route/ entirely inside this map — this is what replaces
-    // handing the resident off to the Google Maps app. coords is
-    // [[lat, lng], ...], the barangay-by-barangay waypoints Dijkstra chose
-    // (routing.py's rebuilt path geometry). Dijkstra needs those in-between
-    // barangay nodes to pick which route/road-condition applies, but they
-    // are administrative centroids, not real waypoints on the road network
-    // -- forcing OSRM to physically detour through one produces the
-    // zigzag/backtrack you'd see if a barangay centroid isn't actually
-    // between the two endpoints. So for the drawn road path we only send
-    // OSRM the real endpoints (where the resident actually is, and the
-    // evacuation center) and let it find the genuine direct road route
-    // between those two; Dijkstra's in-between hops still decide the
-    // eligibility/cost ranking, just not the line that gets drawn.
-    async function setRoute(coords) {
+    async function setRoute(coords, mode) {
       clearRoute();
-      if (!coords || coords.length < 2) return;
-      const endpoints = [coords[0], coords[coords.length - 1]];
-
-      const startPt = endpoints[0];
-      routeStartMarker = L.circleMarker(startPt, {
+      const requestId = routeRequestSequence;
+      const allPoints = (Array.isArray(coords) ? coords : []).filter((p) =>
+        Array.isArray(p) && p.length === 2 &&
+        Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])));
+      if (allPoints.length < 2) return;
+      routeStartMarker = L.circleMarker(allPoints[0], {
         radius: 7, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 1,
       }).addTo(map);
 
-      // Bright dashed placeholder so it's obviously "not a real road yet"
-      // rather than looking like a finished route — replaced below once
-      // the road-snapped geometry comes back.
-      routeLine = L.polyline(endpoints, { color: "#f97316", weight: 3, opacity: 0.8, dashArray: "2 10" }).addTo(map);
-      map.fitBounds(routeLine.getBounds(), { padding: [60, 60], maxZoom: 16 });
-
-      try {
-        const roadCoords = await fetchRoadRoute(endpoints);
-        if (roadCoords.length > 1) {
-          map.removeLayer(routeLine);
-          routeLine = L.polyline(roadCoords, { color: "#2563eb", weight: 5, opacity: 0.85 }).addTo(map);
-          map.fitBounds(routeLine.getBounds(), { padding: [60, 60], maxZoom: 16 });
+      if (mode === "risk") {
+        // DRRM option: the DESTINATION was chosen by the DRRM risk-weighted
+        // Dijkstra on the server. Directions are real mapped-road geometry
+        // (driving) from the start to that destination, passing through the
+        // DRRM graph waypoints only when each waypoint sits on/near a mapped
+        // road. Straight lines between waypoints are NEVER drawn.
+        const MAX_SNAP_M = 300;
+        try {
+          let street = null;
+          let viaUsed = false;
+          if (allPoints.length > 2) {
+            try {
+              const viaTry = await fetchStreetRoute(allPoints, "road");
+              const inner = viaTry.snapsM.slice(1, -1);
+              if (inner.every((d) => d <= MAX_SNAP_M)) { street = viaTry; viaUsed = true; }
+            } catch (e) { /* fall back to start -> destination below */ }
+          }
+          if (!street) street = await fetchStreetRoute([allPoints[0], allPoints[allPoints.length - 1]], "road");
+          if (requestId !== routeRequestSequence) return;
+          routeLine = L.polyline(street.coords, { color: "#f97316", weight: 5, opacity: 0.95 }).addTo(map);
+          map.fitBounds(routeLine.getBounds(), { padding: [38, 38], maxZoom: 16 });
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: "route_debug", ok: true, mode: "risk",
+            distanceKm: street.distanceKm, durationMin: street.durationMin,
+            profile: street.profile, viaWaypoints: viaUsed,
+          }));
+        } catch (err) {
+          if (requestId !== routeRequestSequence) return;
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: "route_debug", ok: false, mode: "risk", error: String(err),
+          }));
         }
+        return;
+      }
+
+      // Use ONLY actual start and destination for street routing, not the
+      // intermediate barangay centroids from the DRRM graph. The old map
+      // used a walking route first, which explains detours off main roads.
+      const endpoints = [allPoints[0], allPoints[allPoints.length - 1]];
+      try {
+        const street = await fetchStreetRoute(endpoints, mode);
+        if (requestId !== routeRequestSequence) return;
+        routeLine = L.polyline(street.coords, {
+          color: mode === "walk" ? "#0d9488" : "#2563eb",
+          weight: 5, opacity: 0.95,
+        }).addTo(map);
+        map.fitBounds(routeLine.getBounds(), { padding: [38, 38], maxZoom: 16 });
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: "route_debug", ok: true, mode,
+          distanceKm: street.distanceKm,
+          durationMin: street.durationMin,
+          profile: street.profile,
+        }));
       } catch (err) {
-        // Offline, both routers unreachable, or a waypoint neither could
-        // snap to a road — keep the dashed straight-line placeholder
-        // rather than show nothing. (See the "route_debug" message this
-        // already sent back to React Native for the actual reason.)
+        if (requestId !== routeRequestSequence) return;
+        // On failure don't draw a fake straight line or secretly fall back
+        // to a different travel mode. Explain the unavailable route.
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: "route_debug", ok: false, mode, error: String(err),
+        }));
       }
     }
 
     function clearRoute() {
+      routeRequestSequence++;
       if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
       if (routeStartMarker) { map.removeLayer(routeStartMarker); routeStartMarker = null; }
     }
@@ -232,8 +262,14 @@ function EvacuationMapScreen({ navigation, route }) {
   const [routing, setRouting] = useState(false);
   const [routeInfo, setRouteInfo] = useState(null); // { distance_km, est_minutes, center_name }
   const [routeError, setRouteError] = useState("");
+  const [routeRoadStatus, setRouteRoadStatus] = useState("idle");
+  const [routeMode, setRouteMode] = useState("road");
+  const [roadSummary, setRoadSummary] = useState(null);
+  const routePointsRef = useRef(null);
   const watchSubRef = useRef(null);
   const lastFixRef = useRef(null); // most recent {latitude, longitude} we have, if any
+  const checkedExistingLocationRef = useRef(false);
+  const [locationAvailable, setLocationAvailable] = useState(false);
 
   const focusCenterId = route?.params?.focusCenterId;
   const selected = useMemo(() => centers.find((c) => String(c.id) === String(selectedId)) || null, [centers, selectedId]);
@@ -286,23 +322,62 @@ function EvacuationMapScreen({ navigation, route }) {
         // for the previous one.
         setRouteInfo(null);
         setRouteError("");
+        setRouteRoadStatus("idle");
+        setRoadSummary(null);
+        routePointsRef.current = null;
         runInMap("window.__evacMap.clearRoute();");
       }
       if (msg.type === "route_debug") {
-        // Comes from setRoute()'s attempt to snap the Dijkstra path onto
-        // real roads via OSRM (see buildMapHtml). Logged here so a failure
-        // (offline, both OSRM hosts unreachable, rate limited, etc.) is
-        // visible instead of just silently falling back to the dashed
-        // straight-line placeholder on the map.
         if (msg.ok) {
-          console.log("Route snapped to roads via", msg.host);
+          setRouteRoadStatus("road_guide");
+          setRouteMode(msg.mode);
+          setRoadSummary({
+            distanceKm: msg.distanceKm,
+            durationMin: msg.durationMin,
+            profile: msg.profile,
+            viaWaypoints: msg.viaWaypoints === true,
+          });
         } else {
-          console.warn("Could not snap route to roads, showing straight line:", msg.error);
+          setRouteRoadStatus("unavailable");
+          setRoadSummary(null);
+          // Stay on the selected tab; don't pretend a failed street request
+          // returned the DRRM graph or a valid route.
+          console.warn("Street route unavailable:", msg.error);
         }
       }
     } catch (err) {
       console.warn("Bad message from map:", err.message);
     }
+  };
+
+  // Show a saved permission's location as soon as the map is ready. Never
+  // silently request new GPS permission: the visible button does that.
+  useEffect(() => {
+    if (!mapReady || checkedExistingLocationRef.current) return;
+    checkedExistingLocationRef.current = true;
+    let disposed = false;
+    (async () => {
+      try {
+        const permission = await Location.getForegroundPermissionsAsync();
+        if (permission.status !== "granted") return;
+        const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (disposed) return;
+        const { latitude, longitude } = fix.coords;
+        lastFixRef.current = { latitude, longitude };
+        setLocationAvailable(true);
+        runInMap(`window.__evacMap.setUserLocation(${latitude}, ${longitude});`);
+        if (!focusCenterId) runInMap(`window.__evacMap.focusOn(${latitude}, ${longitude});`);
+      } catch (err) {
+        console.warn("Existing location unavailable:", err.message);
+      }
+    })();
+    return () => { disposed = true; };
+  }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const centerOnMyLocation = () => {
+    const fix = lastFixRef.current;
+    if (!fix) return;
+    runInMap(`window.__evacMap.focusOn(${fix.latitude}, ${fix.longitude});`);
   };
 
   // ---- live location ------------------------------------------------------
@@ -341,6 +416,7 @@ function EvacuationMapScreen({ navigation, route }) {
       lastFixRef.current = { latitude: first.coords.latitude, longitude: first.coords.longitude };
       runInMap(`window.__evacMap.setUserLocation(${first.coords.latitude}, ${first.coords.longitude});`);
       runInMap(`window.__evacMap.focusOn(${first.coords.latitude}, ${first.coords.longitude});`);
+      setLocationAvailable(true);
 
       watchSubRef.current = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.Balanced, distanceInterval: 10, timeInterval: 4000 },
@@ -363,7 +439,9 @@ function EvacuationMapScreen({ navigation, route }) {
     watchSubRef.current?.remove();
     watchSubRef.current = null;
     setTracking(false);
-    runInMap("window.__evacMap.clearUserLocation();");
+    // Stopping continuous GPS updates does not erase the latest verified
+    // location; residents can still return to that point on the map.
+    if (lastFixRef.current) setLocationAvailable(true);
   };
 
   const toggleTracking = () => {
@@ -371,40 +449,58 @@ function EvacuationMapScreen({ navigation, route }) {
     else startTracking();
   };
 
-  // Draws the shortest (Dijkstra) path to this center right on our own
-  // Leaflet map — the resident never leaves the app / gets handed off to
-  // Google Maps. Uses the freshest GPS fix we have (from "show my
-  // location" above) when there is one; otherwise the backend falls back
-  // to the resident's saved household location.
-  const getDirections = async (center) => {
-    if (!mapReady) return;
+  // Routing decisions remain entirely server-side in existing Dijkstra API.
+  // center === null: let backend choose the lowest-cost eligible center.
+  // center provided: get the best recorded route specifically to that center.
+  const getDirections = async (center = null) => {
+    if (!mapReady || routing) return;
     setRouting(true);
     setRouteError("");
+    setRouteRoadStatus("loading");
+    setRoadSummary(null);
     try {
       const mobileNumber = (await AsyncStorage.getItem("geoaid_resident_mobile")) || "";
-      const params = new URLSearchParams({ mobile_number: mobileNumber, center_id: String(center.id) });
+      const params = new URLSearchParams({ mobile_number: mobileNumber });
+      if (center?.id) params.set("center_id", String(center.id));
       const fix = lastFixRef.current;
       if (fix) {
         params.set("lat", String(fix.latitude));
         params.set("lng", String(fix.longitude));
       }
-
+      // Backend defaults to avoid_risk=1 and returns the risk-weighted
+      // Dijkstra result; do not change any route-cost calculations here.
       const response = await fetch(`${API_BASE}/api/resident/evacuation/nearest-route/?${params.toString()}`);
       const json = await response.json();
-
-      if (!response.ok || !json.recommended) {
-        setRouteError(json.message || "Couldn't find a route to this center yet.");
+      const result = json.recommended;
+      if (!response.ok || !result?.eligible || !Array.isArray(result.geometry) || result.geometry.length < 2) {
+        setRouteError(json.message || "No eligible evacuation route is available right now. Check with Barangay or DRRM staff.");
         runInMap("window.__evacMap.clearRoute();");
         setRouteInfo(null);
         return;
       }
-
-      const { geometry, distance_km, est_minutes } = json.recommended;
-      runInMap(`window.__evacMap.setRoute(${JSON.stringify(geometry)});`);
-      setRouteInfo({ centerName: center.name, distance_km, est_minutes });
+      // Never imply a point is live GPS when the API used a saved position
+      // or barangay centroid instead.
+      const src = json.start?.source || "unknown";
+      if (src !== "live_gps") setLocError("");
+      setSelectedId(result.center.id);
+      // The backend still chooses the eligible center with Dijkstra.
+      // Initially show vehicular main roads to the selected center. Residents
+      // can compare walking paths or the unchanged DRRM graph at any time.
+      routePointsRef.current = result.geometry;
+      setRouteMode("road");
+      runInMap(`window.__evacMap.setRoute(${JSON.stringify(result.geometry)}, "road");`);
+      setRouteInfo({
+        centerName: result.center.name,
+        distance_km: result.distance_km,
+        est_minutes: result.est_minutes,
+        locationSource: src,
+        riskAware: json.avoid_risk === true,
+        isRecommended: center == null,
+        legs: result.legs || [],
+      });
     } catch (err) {
       console.warn("Could not fetch evacuation route:", err.message);
-      setRouteError("Couldn't reach the server to plot a route. Check your connection.");
+      setRouteError("Could not calculate the route. Check your connection and try again.");
       runInMap("window.__evacMap.clearRoute();");
       setRouteInfo(null);
     } finally {
@@ -412,10 +508,21 @@ function EvacuationMapScreen({ navigation, route }) {
     }
   };
 
+  const chooseRouteView = (mode) => {
+    if (!routePointsRef.current || routeMode === mode) return;
+    setRoadSummary(null);
+    setRouteRoadStatus("loading");
+    setRouteMode(mode);
+    runInMap(`window.__evacMap.setRoute(${JSON.stringify(routePointsRef.current)}, ${JSON.stringify(mode)});`);
+  };
+
   const closeDetail = () => {
     setSelectedId(null);
     setRouteInfo(null);
     setRouteError("");
+    setRouteRoadStatus("idle");
+    setRoadSummary(null);
+    routePointsRef.current = null;
     runInMap("window.__evacMap.clearRoute();");
   };
 
@@ -426,20 +533,84 @@ function EvacuationMapScreen({ navigation, route }) {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} accessibilityLabel="Back">
             <Text style={styles.backBtnText}>‹</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Evacuation Centers</Text>
+          <Text style={styles.headerTitle}>Evacuation Map</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={styles.mapLegend}>
+          <Text style={styles.legendText}><Text style={styles.legendOpen}>●</Text> Open center</Text>
+          <Text style={styles.legendText}><Text style={styles.legendClosed}>●</Text> Closed center</Text>
+        </View>
+        <View style={styles.routeActionRow}>
           <TouchableOpacity
-            onPress={toggleTracking}
-            style={styles.backBtn}
-            accessibilityLabel={tracking ? "Stop sharing my location" : "Show my live location"}
-            disabled={locating}
+            style={[styles.recommendedBtn, (routing || !mapReady) && styles.directionsBtnDisabled]}
+            onPress={() => getDirections()}
+            disabled={routing || !mapReady}
+            accessibilityRole="button"
+            accessibilityLabel="Find GeoAid recommended evacuation route"
           >
-            {locating ? (
-              <ActivityIndicator size="small" color="#2563eb" />
-            ) : (
-              <PinIcon color={tracking ? "#16a34a" : "#2563eb"} />
-            )}
+            {routing ? <ActivityIndicator color="#fff" size="small" /> : <NavIconArrow color="#fff" />}
+            <Text style={styles.recommendedBtnText}>Find Recommended Route</Text>
           </TouchableOpacity>
         </View>
+        <View style={styles.mapInstruction}>
+          <Text style={styles.mapInstructionText}>GeoAid selects an evacuation center using DRRM records. Road directions are separate estimates; always follow official hazard and evacuation advisories.</Text>
+        </View>
+
+        {routeInfo ? (
+          <View style={styles.routeBadge}>
+            <Text style={styles.routeBadgeTitle} numberOfLines={1}>
+              {routeInfo.centerName}
+            </Text>
+            <View style={styles.routeModeRow}>
+              <TouchableOpacity
+                onPress={() => chooseRouteView("road")}
+                style={[styles.routeModeButton, routeMode === "road" && styles.routeModeActive]}
+                accessibilityRole="button"
+                accessibilityLabel="Main roads: driving route from a street map; road hazards are not verified"
+              >
+                <Text style={[styles.routeModeText, routeMode === "road" && styles.routeModeTextActive]}>Main roads</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => chooseRouteView("walk")}
+                style={[styles.routeModeButton, routeMode === "walk" && styles.routeModeActive]}
+                accessibilityRole="button"
+                accessibilityLabel="Walking: pedestrian street and footpath route"
+              >
+                <Text style={[styles.routeModeText, routeMode === "walk" && styles.routeModeTextActive]}>Walking</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => chooseRouteView("risk")}
+                style={[styles.routeModeButton, routeMode === "risk" && styles.routeModeActive]}
+                accessibilityRole="button"
+                accessibilityLabel="DRRM: street directions to the DRRM-selected center; not verified for floods or closures"
+              >
+                <Text style={[styles.routeModeText, routeMode === "risk" && styles.routeModeTextActive]}>DRRM</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.routeBadgeText}>
+              {roadSummary
+                ? `${roadSummary.distanceKm} km · about ${roadSummary.durationMin} min · ${roadSummary.profile === "driving" ? "Driving estimate (mapped roads)" : "Walking estimate (mapped paths)"}`
+                : routeRoadStatus === "loading"
+                  ? "Finding mapped streets…"
+                  : "Street route unavailable right now. No route is drawn. Try another option or check your connection."}
+            </Text>
+            <Text style={styles.routeBadgeNote}>
+              {routeMode === "road"
+                ? "Blue line: roads mapped for vehicles. Unverified for floods and closures."
+                : routeMode === "walk"
+                  ? "Teal line: mapped walking paths. Unverified for floods and closures."
+                  : `Orange line: mapped road directions to the DRRM-selected center${roadSummary?.viaWaypoints ? ", via DRRM waypoints" : ""}. Unverified for floods and closures; follow official advisories.`}
+            </Text>
+            <Text style={styles.routeBadgeNote}>
+              DRRM graph estimate (not road distance): {routeInfo.distance_km} km · about {routeInfo.est_minutes} min, measured from the {routeInfo.locationSource === "live_gps" ? "live GPS position" : routeInfo.locationSource === "household_gps" ? "saved household location" : "approximate barangay location"}. Used only to pick the center.
+            </Text>
+            {routeInfo.locationSource !== "live_gps" && (
+              <Text style={styles.routeBadgeNote}>
+                Starting point: {routeInfo.locationSource === "household_gps" ? "saved household GPS" : "approximate barangay location"}. Tap My Current Location for an updated position.
+              </Text>
+            )}
+          </View>
+        ) : null}
 
         <View style={styles.mapWrap}>
           <WebView
@@ -449,6 +620,31 @@ function EvacuationMapScreen({ navigation, route }) {
             onMessage={handleWebViewMessage}
             style={styles.map}
           />
+          <View style={styles.locationToolbar} pointerEvents="box-none">
+            <TouchableOpacity
+              onPress={locationAvailable ? centerOnMyLocation : startTracking}
+              style={styles.locationButton}
+              accessibilityRole="button"
+              accessibilityLabel={locationAvailable ? "My Current Location: recenter the map" : "My Current Location: enable GPS"}
+              disabled={locating || !mapReady}
+            >
+              {locating ? <ActivityIndicator size="small" color="#2563eb" /> : <Text style={styles.targetIcon}>◎</Text>}
+              <View style={styles.locationTextGroup}>
+                <Text style={styles.locationButtonText}>My Current Location</Text>
+                <Text style={styles.locationStatus}>{locating ? "Finding GPS…" : locationAvailable ? "Tap to recenter" : "Tap to enable GPS"}</Text>
+              </View>
+            </TouchableOpacity>
+            {locationAvailable && (
+              <TouchableOpacity
+                onPress={tracking ? stopTracking : toggleTracking}
+                style={styles.stopButton}
+                accessibilityRole="button"
+                accessibilityLabel={tracking ? "Stop live location updates" : "Start live location updates"}
+              >
+                <Text style={styles.stopButtonText}>{tracking ? "Stop Live" : "Live GPS"}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {loading || !mapReady ? (
             <View style={styles.mapOverlay}>
               <ActivityIndicator size="large" color="#2563eb" />
@@ -474,16 +670,7 @@ function EvacuationMapScreen({ navigation, route }) {
             </TouchableOpacity>
           ) : null}
 
-          {routeInfo ? (
-            <View style={styles.routeBadge}>
-              <NavIconArrow />
-              <Text style={styles.routeBadgeText}>
-                {routeInfo.distance_km} km · ~{routeInfo.est_minutes} min to {routeInfo.centerName}
-              </Text>
-            </View>
-          ) : null}
-
-          {selected ? (
+          {selected && !routeInfo ? (
             <View style={styles.detailCard}>
               <TouchableOpacity style={styles.detailClose} onPress={closeDetail} accessibilityLabel="Close">
                 <Text style={styles.detailCloseText}>×</Text>
@@ -523,16 +710,20 @@ function EvacuationMapScreen({ navigation, route }) {
               ) : null}
 
               <TouchableOpacity
-                style={[styles.directionsBtn, routing && styles.directionsBtnDisabled]}
+                style={[styles.directionsBtn,
+                  (routing || selected.status !== "open" || selected.eligible === false) && styles.directionsBtnDisabled]}
                 onPress={() => getDirections(selected)}
-                disabled={routing}
+                disabled={routing || selected.status !== "open" || selected.eligible === false}
+                accessibilityRole="button"
               >
                 {routing ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
                     <PinIcon color="#fff" />
-                    <Text style={styles.directionsBtnText}>Get Directions</Text>
+                    <Text style={styles.directionsBtnText}>
+                      {selected.status !== "open" || selected.eligible === false ? "Center Unavailable" : "Route to This Center"}
+                    </Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -558,10 +749,45 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
   },
-  backBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  backBtn: { width: 42, height: 42, alignItems: "center", justifyContent: "center" },
   backBtnText: { fontSize: 26, color: "#0f172a", marginTop: -2 },
-  headerTitle: { fontSize: 16, fontWeight: "700", color: "#0f172a" },
-  mapWrap: { flex: 1 },
+  headerTitle: { flex: 1, fontSize: 19, fontWeight: "700", color: UI.navy, textAlign: "center" },
+  headerSpacer: { width: 42 },
+  locationToolbar: {
+    position: "absolute", top: 12, right: 12, zIndex: 8, elevation: 8,
+    alignItems: "flex-end", gap: 7, maxWidth: "90%",
+  },
+  locationButton: {
+    minHeight: 48, flexDirection: "row", gap: 10,
+    alignItems: "center", paddingHorizontal: 13, paddingVertical: 8,
+    borderRadius: 15, borderWidth: 1, borderColor: "#dbeafe", backgroundColor: "#fff",
+    shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 }, elevation: 5,
+  },
+  targetIcon: { fontSize: 28, fontWeight: "700", lineHeight: 32, color: "#2563eb" },
+  locationTextGroup: { flexShrink: 1 },
+  locationButtonText: { fontSize: 14, fontWeight: "700", color: "#1d4ed8" },
+  locationStatus: { fontSize: 11, color: "#64748b", marginTop: 1 },
+  stopButton: {
+    minHeight: 38, paddingHorizontal: 14, justifyContent: "center",
+    borderWidth: 1, borderColor: "#d1d5db", borderRadius: 20, backgroundColor: "#fff",
+    elevation: 4,
+  },
+  stopButtonText: { fontSize: 12, color: "#374151", fontWeight: "700" },
+  routeActionRow: { paddingHorizontal: 12, paddingTop: 7, paddingBottom: 4, backgroundColor: "#fff" },
+  recommendedBtn: {
+    minHeight: 46, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
+    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 11, backgroundColor: "#2563eb",
+  },
+  recommendedBtnText: { fontWeight: "700", fontSize: 15, color: "#fff", flexShrink: 1, textAlign: "center" },
+  mapLegend: { flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 20, backgroundColor: "#fff", paddingVertical: 6 },
+  legendText: { fontSize: 12, color: UI.label },
+  legendOpen: { color: "#15803d", fontSize: 15 },
+  legendClosed: { color: "#dc2626", fontSize: 15 },
+  mapInstruction: { backgroundColor: "#fff", paddingHorizontal: 12, paddingBottom: 7 },
+  mapInstructionText: { textAlign: "center", color: UI.muted, fontSize: 12, lineHeight: 18 },
+  mapWrap: { flex: 1, minHeight: 180 },
   map: { flex: 1, backgroundColor: "#eef0f3" },
   mapOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -573,9 +799,10 @@ const styles = StyleSheet.create({
   loadingText: { fontSize: 13, color: "#64748b" },
   errorBanner: {
     position: "absolute",
-    top: 12,
-    left: 16,
-    right: 16,
+    top: 78,
+    left: 12,
+    right: 12,
+    zIndex: 10,
     backgroundColor: "#fff7ed",
     borderWidth: 1,
     borderColor: "#fed7aa",
@@ -584,19 +811,22 @@ const styles = StyleSheet.create({
   },
   errorBannerText: { color: "#9a3412", fontSize: 12 },
   routeBadge: {
-    position: "absolute",
-    top: 12,
-    alignSelf: "center",
-    zIndex: 5,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#2563eb",
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    marginHorizontal: 12, marginTop: 6, marginBottom: 7,
+    backgroundColor: "#fff", borderRadius: 12, borderWidth: 1,
+    borderColor: "#bfdbfe", paddingHorizontal: 12, paddingVertical: 9,
   },
-  routeBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  routeModeRow: { flexDirection: "row", gap: 8, marginVertical: 6 },
+  routeModeButton: {
+    flex: 1, minWidth: 0, minHeight: 36, justifyContent: "center", alignItems: "center",
+    borderRadius: 9, borderWidth: 1, borderColor: "#bfdbfe", backgroundColor: "#eff6ff",
+    paddingHorizontal: 6,
+  },
+  routeModeActive: { borderColor: "#2563eb", backgroundColor: "#2563eb" },
+  routeModeText: { color: "#1d4ed8", fontWeight: "700", fontSize: 12, textAlign: "center" },
+  routeModeTextActive: { color: "#fff" },
+  routeBadgeTitle: { color: "#1d4ed8", fontSize: 13, fontWeight: "800", marginBottom: 3 },
+  routeBadgeText: { color: "#0f172a", fontSize: 13, fontWeight: "700", lineHeight: 18 },
+  routeBadgeNote: { color: "#64748b", fontSize: 11, lineHeight: 16, marginTop: 3 },
   detailCard: {
     position: "absolute",
     left: 12,
@@ -622,11 +852,11 @@ const styles = StyleSheet.create({
   },
   detailCloseText: { fontSize: 20, color: "#94a3b8" },
   detailName: { fontSize: 16, fontWeight: "700", color: "#0f172a", paddingRight: 24 },
-  detailMeta: { fontSize: 12, color: "#64748b", marginTop: 2 },
+  detailMeta: { fontSize: 13, color: "#526176", marginTop: 2, flexShrink: 1 },
   detailRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 },
   statusPill: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
   statusPillText: { fontSize: 12, fontWeight: "700" },
-  detailWarning: { fontSize: 12, color: "#9a3412", marginTop: 8 },
+  detailWarning: { fontSize: 13, lineHeight: 19, color: "#9a3412", marginTop: 8 },
   detailNote: { fontSize: 12, color: "#94a3b8", marginTop: 6, fontStyle: "italic" },
   directionsBtn: {
     flexDirection: "row",
@@ -638,7 +868,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 14,
   },
-  directionsBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  directionsBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   directionsBtnDisabled: { opacity: 0.7 },
   emptyCard: {
     position: "absolute",

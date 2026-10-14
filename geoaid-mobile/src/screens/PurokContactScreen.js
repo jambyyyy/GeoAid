@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -217,7 +218,7 @@ function PurokContactScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   header: {
@@ -325,6 +326,6 @@ const styles = StyleSheet.create({
   guidelinesList: { gap: 6 },
   guidelineItem: {},
   guidelineText: { fontSize: 12, color: "#7c2d12", lineHeight: 16 },
-});
+}, "purokContact"));
 
 export default PurokContactScreen;

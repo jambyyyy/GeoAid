@@ -51,32 +51,27 @@ const sectionInfo = (barangay) => ({
 });
 
 // Statuses barangay staff can set on a relief release.
-const RELIEF_ACTIONS = [
-  { value: "processing", label: "Processing" },
-  { value: "ready", label: "Ready for Pickup" },
-  { value: "claimed", label: "Received" },
-];
+// These are the active assembled packs from CSWD Inventory.
+// Canned sardines and corned beef are INGREDIENTS of Food Pack, not an
+// additional type of pack. Historical canned-only records remain intact.
+const ACTIVE_RELIEF_PACKS = ["rice pack", "food pack", "medicine pack", "water pack"];
+const isWholePositive = (value) => /^\d+$/.test(String(value).trim()) &&
+  Number.isSafeInteger(Number(value)) && Number(value) > 0;
 
-// The same Processing / Ready for Pickup / Received actions CSWD has.
+// Household releases advance one step at a time; older cancelled rows
+// cannot be edited. CSWD batches have a separate Confirm Received button.
 function ReliefActionButtons({ release, busy, onChange }) {
   const st = release.claim_status === "pending" ? "processing" : release.claim_status;
   if (st === "claimed") return <span className="relief-done">Received</span>;
-  return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {RELIEF_ACTIONS.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          className="action-btn"
-          style={{ opacity: st === o.value ? 0.55 : 1, padding: "6px 10px", fontSize: "0.8rem" }}
-          disabled={busy || st === o.value}
-          onClick={() => onChange(release, o.value)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
+  if (st === "cancelled") return <span className="relief-done">Cancelled</span>;
+  const next = st === "processing"
+    ? { value: "ready", label: "Mark Ready for Pickup" }
+    : { value: "claimed", label: "Confirm Received" };
+  return <button type="button" className="action-btn" disabled={busy}
+    style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+    onClick={() => onChange(release, next.value)}>
+    {busy ? "Saving…" : next.label}
+  </button>;
 }
 
 const FLAG_CLASS = {
@@ -296,6 +291,8 @@ function Dashboard() {
   const [reliefFormSuccess, setReliefFormSuccess] = useState("");
   const [updatingReliefId, setUpdatingReliefId] = useState(null);
   const [reliefStatusError, setReliefStatusError] = useState("");
+  const [queueStatusFilter, setQueueStatusFilter] = useState("waiting");
+  const [queuePriorityFilter, setQueuePriorityFilter] = useState("All");
 
   const [reportForm, setReportForm] = useState({
     title: "",
@@ -329,19 +326,22 @@ function Dashboard() {
   // Users), same convention Purok President dashboards use.
   const barangay = dashboardData?.barangay || "";
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async ({ silent = false } = {}) => {
     try {
       const response = await fetch(
         `${API_URL}/api/barangay/dashboard/?username=${encodeURIComponent(username)}`
       );
 
       const data = await response.json();
-
+      if (!response.ok || data.message) throw new Error(data.message || "Could not load Barangay dashboard.");
       setDashboardData(data);
       setHouseholds(data.households || []);
+      setError("");
+      return true;
     } catch (err) {
       console.error(err);
-      setError("Failed to load dashboard data.");
+      if (!silent) setError(err.message || "Failed to load dashboard data.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -351,6 +351,15 @@ function Dashboard() {
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
+
+  // Relief availability/status are shared live with CSWD Inventory.
+  // Refresh while distributing so newly confirmed arrivals appear.
+  useEffect(() => {
+    if (activeItem !== "Relief Distribution") return;
+    const timer = window.setInterval(() => { fetchDashboard({ silent: true }); }, 30000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeItem, username]);
 
   useEffect(() => {
     const fetchEvacuation = async () => {
@@ -469,20 +478,44 @@ function Dashboard() {
   };
 
   const handleReliefFieldChange = (field, value) => {
+    setReliefFormError("");
     setReliefFormSuccess("");
-    setReliefForm((prev) => ({ ...prev, [field]: value }));
+    setReliefForm((prev) => ({ ...prev, [field]: value,
+      ...(field === "goods_type" ? { quantity: "" } : {}),
+    }));
   };
 
-  // Gives relief goods to one household that is checked in at this
-  // barangay's evacuation center, out of the goods CSWD released to the
-  // barangay (and that were marked Received).
+  // Household issues draw ONLY from this barangay's confirmed CSWD
+  // receipts. The server repeats every validation and stock check.
   const handleRecordRelief = async (e) => {
     e.preventDefault();
+    if (isSubmittingRelief) return;
     setReliefFormError("");
     setReliefFormSuccess("");
 
-    if (!reliefForm.household_code || !reliefForm.goods_type || !reliefForm.quantity) {
-      setReliefFormError("Household, goods type, and quantity are required.");
+    const pool = dashboardData?.relief_pool || {};
+    const available = Number(pool[reliefForm.goods_type] || 0);
+    const eligible = (dashboardData?.evacuation_centers || []).some((center) =>
+      (center.households || []).some((h) => h.household_code === reliefForm.household_code));
+    if (!reliefForm.household_code || !eligible) {
+      setReliefFormError("Choose a household currently checked in at your barangay evacuation center.");
+      return;
+    }
+    if (!ACTIVE_RELIEF_PACKS.includes(reliefForm.goods_type) || available <= 0) {
+      setReliefFormError("Select an assembled pack that your barangay has received and still has available.");
+      return;
+    }
+    if (!isWholePositive(reliefForm.quantity) || Number(reliefForm.quantity) > available) {
+      setReliefFormError(`Enter a whole number from 1 to ${available} for this pack.`);
+      return;
+    }
+    if (reliefForm.disaster_type_id !== "general" &&
+        !(dashboardData?.disaster_types || []).some((d) => String(d.id) === String(reliefForm.disaster_type_id))) {
+      setReliefFormError("Choose General Relief or an active disaster type.");
+      return;
+    }
+    if (!reliefForm.remarks.trim() || reliefForm.remarks.trim().length > 255) {
+      setReliefFormError("Enter remarks (1 to 255 characters) before recording the distribution.");
       return;
     }
 
@@ -491,24 +524,23 @@ function Dashboard() {
       const response = await fetch(`${API_URL}/api/barangay/relief/record/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...reliefForm, username }),
+        body: JSON.stringify({ ...reliefForm, username, remarks: reliefForm.remarks.trim() }),
       });
-
       const data = await response.json().catch(() => ({}));
-
       if (!response.ok || !data.success) {
         setReliefFormError(data.message || "Could not record this relief release. Please try again.");
+        await fetchDashboard({ silent: true }); // stock may have changed since selection
         return;
       }
-
-      await fetchDashboard();
+      const refreshed = await fetchDashboard({ silent: true });
       setReliefFormSuccess(
-        `Logged ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.family_name} Family — now Processing.`
+        `Recorded ${data.relief.quantity} ${data.relief.goods_type} for ${data.relief.family_name} Family — Processing.` +
+        (refreshed ? "" : " Refresh the page to see the latest balance.")
       );
       setReliefForm({ household_code: "", goods_type: "", quantity: "", disaster_type_id: "", remarks: "" });
     } catch (err) {
       console.error(err);
-      setReliefFormError("Unable to connect to the server.");
+      setReliefFormError("Unable to connect to the server. Check whether the transaction was saved before trying again.");
     } finally {
       setIsSubmittingRelief(false);
     }
@@ -518,6 +550,9 @@ function Dashboard() {
   // Received. Received locks it (no further changes).
   const handleReliefStatusChange = async (release, newStatus) => {
     if (newStatus === release.claim_status) return;
+    if (newStatus === "claimed" && !window.confirm(
+      `Confirm that release ${release.tracking_number} was actually received? This cannot be undone.`
+    )) return;
 
     setReliefStatusError("");
     setUpdatingReliefId(release.id);
@@ -537,7 +572,7 @@ function Dashboard() {
 
       // Refetch so the release table, the barangay's available goods and
       // each household's relief status all stay in sync.
-      await fetchDashboard();
+      await fetchDashboard({ silent: true });
       showToast(`Release ${release.tracking_number} marked ${data.relief.status}`);
     } catch (err) {
       console.error(err);
@@ -636,21 +671,47 @@ function Dashboard() {
   const myCenters = dashboardData?.evacuation_centers || [];
   const reliefReleases = dashboardData?.relief_releases || [];
   const householdRelief = dashboardData?.household_relief || [];
-  const reliefPool = dashboardData?.relief_pool || { rice: 0, pack: 0 };
-  // Every household currently checked in at one of this barangay's
-  // evacuation centers — the only ones relief can be given to here.
-  // Ordered most-vulnerable first (priority score), so the households that
-  // need relief the most come first everywhere this list is used.
-  const checkedInHouseholds = myCenters
-    .flatMap((c) => c.households.map((h) => ({ ...h, center_name: c.name })))
-    .sort(
-      (a, b) =>
-        (b.priority_score ?? 0) - (a.priority_score ?? 0) ||
-        String(a.family_name).localeCompare(String(b.family_name))
-    );
-  // Checked-in households that have not been given relief yet, in the order
-  // they should be served.
+  const reliefPool = dashboardData?.relief_pool || {};
+  // Use the same four active pack types as CSWD. Zero/legacy categories
+  // are not shown as selectable finished goods in Barangay.
+  const availablePacks = ACTIVE_RELIEF_PACKS
+    .map((goods) => ({ goods, qty: Number(reliefPool[goods] || 0) }))
+    .filter(({ qty }) => qty > 0);
+  const selectedGoodsAvailable = Number(reliefPool[reliefForm.goods_type] || 0);
+  // The queue contains confirmed households with members currently checked
+  // in. A household appears once, even if legacy attendance records place
+  // its family members at more than one center.
+  const confirmedCodes = new Set(confirmedHouseholds.map((h) => h.id));
+  const checkedInByCode = new Map();
+  for (const center of myCenters) {
+    for (const h of center.households || []) {
+      if (!confirmedCodes.has(h.household_code)) continue;
+      const row = { ...h, center_name: center.name };
+      const previous = checkedInByCode.get(h.household_code);
+      if (!previous || (Number(h.members_present) || 0) > (Number(previous.members_present) || 0)) {
+        checkedInByCode.set(h.household_code, row);
+      }
+    }
+  }
+  const checkedInHouseholds = Array.from(checkedInByCode.values()).sort(
+    (a, b) =>
+      (Number(b.priority_score) || 0) - (Number(a.priority_score) || 0) ||
+      String(a.family_name).localeCompare(String(b.family_name)) ||
+      String(a.household_code).localeCompare(String(b.household_code))
+  );
+
   const reliefQueue = checkedInHouseholds.filter((h) => h.relief_status === "Not Yet Given");
+  const inProgressQueue = checkedInHouseholds.filter((h) =>
+    h.relief_status === "Processing" || h.relief_status === "Ready for Pickup"
+  );
+  const receivedQueue = checkedInHouseholds.filter((h) => h.relief_status === "Relief Given");
+  const shownReliefQueue = checkedInHouseholds.filter((h) => {
+    const statusMatch = queueStatusFilter === "all" ||
+      (queueStatusFilter === "waiting" && h.relief_status === "Not Yet Given") ||
+      (queueStatusFilter === "progress" && ["Processing", "Ready for Pickup"].includes(h.relief_status)) ||
+      (queueStatusFilter === "received" && h.relief_status === "Relief Given");
+    return statusMatch && (queuePriorityFilter === "All" || h.priority_level === queuePriorityFilter);
+  });
   const nextInLine = reliefQueue[0];
   const selectedReliefHousehold = checkedInHouseholds.find(
     (h) => h.household_code === reliefForm.household_code
@@ -938,24 +999,30 @@ function Dashboard() {
         )}
 
         {activeItem === "Relief Distribution" && (
-          <section className="content-grid">
-            <article className="panel">
+          <section className="content-grid barangay-relief-tab">
+            <article className="panel" style={{ gridColumn: "1 / -1" }}>
               <h2>Relief Goods Available to Your Barangay</h2>
               <p className="panel-note">
                 What CSWD released to {barangay ? `Brgy. ${barangay}` : "your barangay"} and was marked
                 Received, minus what you already gave to households.
               </p>
               <div className="stats-grid">
-                {Object.entries(reliefPool).map(([goods, qty]) => (
+                {availablePacks.map(({ goods, qty }) => (
                   <article key={goods} className="stat-card stat-info">
                     <span className="stat-value">{qty}</span>
                     <span className="stat-label">{goods.charAt(0).toUpperCase() + goods.slice(1)} Available</span>
                   </article>
                 ))}
+                {availablePacks.length === 0 && (
+                  <p className="panel-note">No received packs available yet. Confirm a CSWD release below after it arrives.</p>
+                )}
               </div>
+              {Number(dashboardData?.legacy_canned_balance || 0) > 0 && (
+                <p className="panel-note">{dashboardData.legacy_canned_balance} older canned-only packs are recorded separately. They have not been counted as Food Packs because their contents may differ. Ask CSWD to reconcile this older stock before using it.</p>
+              )}
             </article>
 
-            <article className="panel">
+            <article className="panel" style={{ gridColumn: "1 / -1" }}>
               <h2>Give Relief to a Checked-In Household</h2>
               <form className="donation-form" onSubmit={handleRecordRelief}>
                 {reliefFormError && <p className="donation-form-error">{reliefFormError}</p>}
@@ -965,6 +1032,7 @@ function Dashboard() {
                   <label htmlFor="relief_household_code">Household</label>
                   <select
                     id="relief_household_code"
+                    required
                     value={reliefForm.household_code}
                     onChange={(e) => handleReliefFieldChange("household_code", e.target.value)}
                   >
@@ -991,16 +1059,18 @@ function Dashboard() {
                   <label htmlFor="relief_goods_type">Goods Type</label>
                   <select
                     id="relief_goods_type"
+                    required
                     value={reliefForm.goods_type}
                     onChange={(e) => handleReliefFieldChange("goods_type", e.target.value)}
                   >
                     <option value="">Select goods</option>
-                    {Object.entries(reliefPool).map(([goods, qty]) => (
-                      <option key={goods} value={goods} disabled={qty <= 0}>
+                    {availablePacks.map(({ goods, qty }) => (
+                      <option key={goods} value={goods}>
                         {goods.charAt(0).toUpperCase() + goods.slice(1)} — {qty} available
                       </option>
                     ))}
                   </select>
+                  <span className="field-hint">Goods come from CSWD's finished packs, after your barangay confirms receipt. Canned goods are included as Food Pack ingredients.</span>
                 </div>
 
                 <div className="donation-form-field">
@@ -1009,19 +1079,27 @@ function Dashboard() {
                     id="relief_quantity"
                     type="number"
                     min="1"
+                    step="1"
+                    max={selectedGoodsAvailable || undefined}
+                    required
                     value={reliefForm.quantity}
                     onChange={(e) => handleReliefFieldChange("quantity", e.target.value)}
                   />
+                  {reliefForm.goods_type && (
+                    <span className="field-hint">Received and available: {selectedGoodsAvailable} packs. After distribution: {Math.max(0, selectedGoodsAvailable - (Number(reliefForm.quantity) || 0))} packs.</span>
+                  )}
                 </div>
 
                 <div className="donation-form-field">
                   <label htmlFor="relief_disaster_type_id">Disaster Type</label>
                   <select
                     id="relief_disaster_type_id"
+                    required
                     value={reliefForm.disaster_type_id}
                     onChange={(e) => handleReliefFieldChange("disaster_type_id", e.target.value)}
                   >
-                    <option value="">Not tied to a specific disaster</option>
+                    <option value="">Select release purpose</option>
+                    <option value="general">General Relief (no specific disaster)</option>
                     {(dashboardData?.disaster_types || []).map((dt) => (
                       <option key={dt.id} value={dt.id}>{dt.name}</option>
                     ))}
@@ -1029,10 +1107,12 @@ function Dashboard() {
                 </div>
 
                 <div className="donation-form-field">
-                  <label htmlFor="relief_remarks">Remarks (optional)</label>
+                  <label htmlFor="relief_remarks">Remarks</label>
                   <input
                     id="relief_remarks"
                     type="text"
+                    required
+                    maxLength={255}
                     value={reliefForm.remarks}
                     onChange={(e) => handleReliefFieldChange("remarks", e.target.value)}
                     placeholder="e.g. Picked up by household head"
@@ -1040,84 +1120,125 @@ function Dashboard() {
                 </div>
 
                 <div className="donation-form-actions">
-                  <button type="submit" className="action-btn" disabled={isSubmittingRelief}>
+                  <button type="submit" className="action-btn" disabled={isSubmittingRelief || availablePacks.length === 0}>
                     {isSubmittingRelief ? "Saving…" : "Record Relief Release"}
                   </button>
                 </div>
               </form>
             </article>
 
-            <article className="panel relief-wide">
+            <article className="panel relief-wide" style={{ gridColumn: "1 / -1" }}>
               <h2>Relief Priority Queue</h2>
               <p className="panel-note">
-                Checked-in households still waiting for relief, most vulnerable first (PWD and pregnant
-                members, then senior citizens and children under 5).
+                {reliefQueue.length} waiting · {inProgressQueue.length} processing or ready · {receivedQueue.length} received.
+                Priority is based on confirmed household vulnerability profiles.
               </p>
-                <Paginated items={reliefQueue}>{(pageRows, rowOffset) => (
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Household</th>
-                      <th>Evacuation Center</th>
-                      <th>Flags</th>
-                      <th>Priority</th>
-                      <th>Members Present</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reliefQueue.length > 0 ? (
-                      pageRows.map((h, i) => (
-                        <tr key={h.household_code}>
-                          <td>{rowOffset + i + 1}</td>
-                          <td>{h.family_name} Family ({h.household_code})</td>
-                          <td>{h.center_name}</td>
-                          <td>
-                            {(h.flags || []).length
-                              ? h.flags.map((f) => (
-                                <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
-                              ))
-                              : "—"}
-                          </td>
-                          <td>
-                            <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
-                              {h.priority_level || "Low"}
-                            </span>
-                          </td>
-                          <td>{h.members_present}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="action-btn"
-                              style={{ padding: "6px 10px", fontSize: "0.8rem" }}
-                              onClick={() => {
-                                handleReliefFieldChange("household_code", h.household_code);
-                                window.scrollTo({ top: 0, behavior: "smooth" });
-                              }}
-                            >
-                              Give Relief
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan="7">
-                          {checkedInHouseholds.length === 0
-                            ? "No households are checked in at your evacuation center yet."
-                            : "Every checked-in household has already been given relief."}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", margin: "14px 0 16px" }}>
+                <div className="donation-form-field" style={{ flex: "1 1 180px" }}>
+                  <label htmlFor="queue_status_filter">Status</label>
+                  <select id="queue_status_filter" value={queueStatusFilter}
+                    onChange={(e) => setQueueStatusFilter(e.target.value)}>
+                    <option value="waiting">Waiting for Relief</option>
+                    <option value="progress">Processing / Ready</option>
+                    <option value="received">Received</option>
+                    <option value="all">All Checked-In Households</option>
+                  </select>
+                </div>
+                <div className="donation-form-field" style={{ flex: "1 1 180px" }}>
+                  <label htmlFor="queue_priority_filter">Priority</label>
+                  <select id="queue_priority_filter" value={queuePriorityFilter}
+                    onChange={(e) => setQueuePriorityFilter(e.target.value)}>
+                    <option value="All">All Priorities</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                  </select>
+                </div>
+                <span className="household-meta">{shownReliefQueue.length} household{shownReliefQueue.length === 1 ? "" : "s"}</span>
               </div>
-                )}</Paginated>
+              {reliefStatusError && <p className="donation-form-error">{reliefStatusError}</p>}
+              <Paginated items={shownReliefQueue} resetKey={`${queueStatusFilter}|${queuePriorityFilter}`}>
+                {(pageRows, rowOffset) => (
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Household / Purok</th>
+                          <th>Evacuation Center</th>
+                          <th>Priority</th>
+                          <th>Vulnerabilities</th>
+                          <th>Present</th>
+                          <th>Relief Status / Last Release</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shownReliefQueue.length > 0 ? pageRows.map((h, i) => (
+                          <tr key={h.household_code}>
+                            <td>{rowOffset + i + 1}</td>
+                            <td>
+                              <strong>{h.family_name} Family</strong>
+                              <div className="household-submitted">{h.household_code} · {h.purok || "Purok not set"}</div>
+                            </td>
+                            <td>{h.center_name}</td>
+                            <td>
+                              <span className={`priority-badge ${PRIORITY_CLASS[h.priority_level] || ""}`}>
+                                {h.priority_level || "Low"}
+                              </span>
+                            </td>
+                            <td>
+                              {(h.flags || []).length ? h.flags.map((f) => (
+                                <span key={f} className={`flag-badge ${FLAG_CLASS[f] || ""}`} style={{ marginRight: 4 }}>{f}</span>
+                              )) : "None recorded"}
+                            </td>
+                            <td>{h.members_present}</td>
+                            <td>
+                              <span className={`status-badge status-${h.relief_status === "Relief Given" ? "claimed" : "pending"}`}>
+                                {h.relief_status === "Relief Given" ? "Received" : h.relief_status}
+                              </span>
+                              {h.relief_last && <div className="household-submitted">{h.relief_last}</div>}
+                            </td>
+                            <td>
+                              {h.relief_status === "Not Yet Given" ? (
+                                <button type="button" className="action-btn"
+                                  disabled={availablePacks.length === 0}
+                                  title={availablePacks.length === 0 ? "Confirm receipt of available CSWD packs first" : `Allocate relief to ${h.family_name} Family`}
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => {
+                                    handleReliefFieldChange("household_code", h.household_code);
+                                    document.getElementById("relief_household_code")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                  }}>
+                                  Give Relief
+                                </button>
+                              ) : h.active_relief ? (
+                                <ReliefActionButtons release={h.active_relief}
+                                  busy={updatingReliefId === h.active_relief.id}
+                                  onChange={handleReliefStatusChange} />
+                              ) : (
+                                <span className="household-submitted">Received</span>
+                              )}
+                            </td>
+                          </tr>
+                        )) : (
+                          <tr>
+                            <td colSpan="8">
+                              {checkedInHouseholds.length === 0
+                                ? "No confirmed households are checked in at this barangay's evacuation centers."
+                                : queueStatusFilter === "waiting" && queuePriorityFilter === "All"
+                                  ? "No households are currently waiting for their first relief allocation."
+                                  : "No households match these filters."}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Paginated>
             </article>
 
-            <article className="panel relief-wide">
+            <article className="panel relief-wide" style={{ gridColumn: "1 / -1" }}>
               <h2>Households in Your Evacuation Center</h2>
               <p className="panel-note">
                 {dashboardData?.households_in_evacuation ?? 0} household
@@ -1227,7 +1348,7 @@ function Dashboard() {
                 )}</Paginated>
             </article>
 
-            <article className="panel relief-wide">
+            <article className="panel relief-wide" style={{ gridColumn: "1 / -1" }}>
               <h2>Relief Given to Households</h2>
               {reliefStatusError && <p className="donation-form-error">{reliefStatusError}</p>}
                 <Paginated items={householdRelief}>{(pageRows) => (
@@ -1279,7 +1400,7 @@ function Dashboard() {
                 )}</Paginated>
             </article>
 
-            <article className="panel relief-wide">
+            <article className="panel relief-wide" style={{ gridColumn: "1 / -1" }}>
               <h2>Relief Released to {barangay ? `Brgy. ${barangay}` : "Your Barangay"}</h2>
               <p className="panel-note">
                 {dashboardData?.relief_released ?? 0} total units released by CSWD. Confirm a release

@@ -1,6 +1,8 @@
+import { mergeResidentStyles } from "../residentPolish";
 import { Modal, Text, TouchableOpacity, View, FlatList, StyleSheet, Pressable } from "react-native";
 import { ChevronDownIcon, CheckIcon } from "./icons";
 import { useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 /**
  * A styled dropdown that opens a bottom-sheet modal list, used instead of
@@ -13,6 +15,7 @@ import { useState } from "react";
  */
 function SelectField({ value, onChange, options, placeholder = "Select an option", disabled = false }) {
   const [open, setOpen] = useState(false);
+  const insets = useSafeAreaInsets();
 
   const selectedLabel = value || placeholder;
 
@@ -45,7 +48,7 @@ function SelectField({ value, onChange, options, placeholder = "Select an option
         onRequestClose={() => setOpen(false)}
       >
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
-          <Pressable style={styles.sheet} onPress={() => {}}>
+          <Pressable style={[styles.sheet, { paddingBottom: Math.max(24, insets.bottom + 12) }]} onPress={() => {}}>
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>{placeholder}</Text>
             <FlatList
@@ -74,7 +77,7 @@ function SelectField({ value, onChange, options, placeholder = "Select an option
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   field: {
     flexDirection: "row",
     alignItems: "center",
@@ -130,6 +133,6 @@ const styles = StyleSheet.create({
   },
   optionText: { fontSize: 15, color: "#0f172a" },
   optionTextSelected: { color: "#16a34a", fontWeight: "600" },
-});
+}, "select"));
 
 export default SelectField;

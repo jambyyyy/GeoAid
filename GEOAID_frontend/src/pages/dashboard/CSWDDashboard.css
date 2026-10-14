@@ -835,3 +835,167 @@
     border-color: #e2e8f0;
     background: #fff;
 }
+/* ---------- Pack Builder (Relief Distribution tab) ---------- */
+
+.pack-builder-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.pack-builder-row .donation-form-field {
+    flex: 1 1 180px;
+    min-width: 160px;
+}
+
+.pack-builder-row .action-btn {
+    flex: 0 0 auto;
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.stepper input {
+  width: 64px;
+  text-align: center;
+}
+.stepper .relief-btn {
+  min-width: 34px;
+}
+.stepper-value {
+  min-width: 36px;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* ---------- Inventory tab: item table, Make a Pack, Stock History ---------- */
+
+/* Stat cards: 2 fixed + one per pack type, so fit as many as the row allows. */
+.stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.stat-card .stat-value {
+    font-size: 28px;
+}
+
+.inventory-table th,
+.inventory-table td,
+.stock-history-table th,
+.stock-history-table td {
+    padding: 8px 10px;
+}
+
+.inventory-table td:first-child {
+    font-weight: 600;
+}
+
+.good-for-select {
+    padding: 4px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #111827;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.good-for-select:focus {
+    outline: 2px solid #bfdbfe;
+    border-color: #2563eb;
+}
+
+.make-pack-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+}
+
+.make-pack-filter input {
+    width: 16px;
+    height: 16px;
+    accent-color: #2563eb;
+}
+
+.history-toolbar {
+    margin-top: 10px;
+    margin-bottom: 12px;
+}
+
+.stock-history-table td.details-cell {
+    white-space: normal;
+    min-width: 220px;
+    max-width: 380px;
+    color: #475569;
+}
+
+.qty-in,
+.qty-out {
+    font-weight: 700;
+}
+
+.qty-in { color: #047857; }
+.qty-out { color: #b45309; }
+
+.field-hint {
+    display: block;
+}
+
+.stepper .relief-btn {
+    padding: 4px 8px;
+    line-height: 1;
+    font-size: 14px;
+}
+
+.donation-form-actions .relief-btn {
+    margin-right: 8px;
+}
+/* 2026 layout/validation fixes: scoped; preserve existing theme. */
+.dashboard-page, .dashboard-page * { box-sizing: border-box; }
+.dashboard-main { width: 100%; min-width: 0; }
+.dashboard-main > section, .dashboard-main > div, .panel, .table-scroll { min-width: 0; }
+.dashboard-main .content-grid { align-items: start; }
+.cswd-relief-distribution > .panel:first-child { grid-column: 1 / -1; }
+.cswd-relief-distribution .donation-form { max-width: 100%; }
+.donation-form-field { min-width: 0; }
+.donation-form-field input, .donation-form-field select, .donation-form-field textarea { width: 100%; min-width: 0; }
+.donation-form .panel-note, .donation-form-error { grid-column: 1 / -1; }
+.data-table { width: 100%; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.goods-option:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.goods-option.out-of-stock { pointer-events: none; }
+.stock-availability-note { font-size: 12px; color: #475569; margin: 5px 0 9px; grid-column: 1 / -1; }
+.stock-availability-note strong { color: #1d4ed8; }
+@media (max-width: 768px) {
+  .dashboard-main { padding: 16px; }
+  .dashboard-header { gap: 12px; }
+  .header-actions { flex-wrap: wrap; }
+  .donation-form { grid-template-columns: minmax(0, 1fr); }
+  .cswd-relief-distribution > .panel:first-child { grid-column: auto; }
+  .content-grid { grid-template-columns: minmax(0, 1fr); }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); }
+}
+
+/* The relief selector uses real buttons so keyboard users can choose packs. */
+.goods-selection-scroll .goods-option { width: 100%; font: inherit; text-align: left; }
+.status-received-by-barangay { background: #d1fae5; color: #047857; }
+
+/* Inventory layout only: preserve the original CSWD panels and controls.
+   A full-width row prevents the Make a Pack table and form from being squeezed
+   into the narrow right column of the general dashboard content grid. */
+.cswd-inventory-page {
+    grid-template-columns: minmax(0, 1fr);
+}
+.cswd-inventory-page > .panel {
+    grid-column: 1 / -1;
+    min-width: 0;
+}

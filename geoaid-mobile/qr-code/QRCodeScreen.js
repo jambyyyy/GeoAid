@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../src/residentPolish";
 import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl, Share, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -187,7 +188,7 @@ function QRCodeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingTop: 8 },
@@ -262,6 +263,6 @@ const styles = StyleSheet.create({
   memberName: { fontWeight: "600", fontSize: 14, color: "#111827" },
   memberRole: { fontSize: 12, color: "#6b7280" },
   footerNote: { fontSize: 11, color: "#9aa3af", textAlign: "center", lineHeight: 16 },
-});
+}, "qr"));
 
 export default QRCodeScreen;

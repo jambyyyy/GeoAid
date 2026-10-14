@@ -1,3 +1,4 @@
+import { mergeResidentStyles } from "../../residentPolish";
 import { useEffect, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from "react-native";
 import SelectField from "../../components/SelectField";
@@ -123,7 +124,7 @@ function HouseholdStep({ initialValue, onContinue }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(mergeResidentStyles({
   form: { paddingBottom: 32 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -140,6 +141,6 @@ const styles = StyleSheet.create({
     marginTop: 22,
   },
   continueBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-});
+}, "household"));
 
 export default HouseholdStep;

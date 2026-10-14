@@ -3,6 +3,7 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.contrib.auth.models import User
 from django.utils import timezone
 import random
+import uuid
 
 
 class Barangay(models.Model):
@@ -516,8 +517,16 @@ class Donation(models.Model):
     contact_num = models.CharField(max_length=20, blank=True)
     goods_type = models.CharField(max_length=100)
     quantity = models.PositiveIntegerField(default=0)
+    # Unit the quantity was counted in when it was logged: "pcs" or "kg".
+    unit = models.CharField(max_length=20, default="pcs")
     donation_date = models.DateField(default=timezone.now)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="pending")
+    # True once this donation's quantity has been added to ReliefStock.
+    # Default True on purpose: every row that existed before this field was
+    # added was already counted by the old logic, so the migration must NOT
+    # mark them uncounted (that would double count them when marked received).
+    # New rows are always created with an explicit value (see cswd_add_donation).
+    stock_counted = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["-donation_date"]
@@ -526,11 +535,37 @@ class Donation(models.Model):
         return f"{self.donor_name} — {self.goods_type} x{self.quantity}"
 
 
-# Relief goods come in only two kinds: "rice" and "pack". A pack holds
-# all the other goods (canned goods, noodles, ...), so there is no
-# separate storage row for them. Names are matched case-insensitively
-# in the views; the label helper below capitalises them for display.
-GOODS_TYPES = ("rice", "pack")
+# Goods that can be RELEASED to barangays are the five PACK types below.
+# Individual items (rice, canned goods, noodles, medicine, water bottles...)
+# stay in the inventory and leave it by being assembled into a pack in the
+# Pack Builder. Every inventory item has a category, and the category
+# decides which pack type it can go into. Pack names are matched
+# case-insensitively in the views; the label helper capitalises them.
+RICE_PACK = "rice pack"
+CANNED_PACK = "canned goods pack"
+FOOD_PACK = "food pack"
+MEDICINE_PACK = "medicine pack"
+WATER_PACK = "water pack"
+GOODS_TYPES = (RICE_PACK, CANNED_PACK, FOOD_PACK, MEDICINE_PACK, WATER_PACK)
+# The goods types that are made by packing other items (all of them).
+PACK_TYPES = GOODS_TYPES
+
+# Inventory item categories -> the pack type the item goes into.
+CATEGORY_CHOICES = [
+    ("rice", "Rice"),
+    ("canned_noodles", "Canned Goods & Noodles"),
+    ("medicine", "Medicine"),
+    ("water", "Water"),
+]
+CATEGORY_TO_PACK = {
+    "rice": RICE_PACK,
+    "canned_noodles": FOOD_PACK,
+    "medicine": MEDICINE_PACK,
+    "water": WATER_PACK,
+}
+CATEGORY_LABELS = dict(CATEGORY_CHOICES)
+# Display name of each pack type's category (used by the dashboard).
+PACK_CATEGORY = {v: k for k, v in CATEGORY_TO_PACK.items()}
 
 
 def goods_label(value):
@@ -539,20 +574,30 @@ def goods_label(value):
 
 
 class GoodsLabelMixin:
-    """Gives get_goods_type_display() for the rice / pack goods types."""
+    """Gives get_goods_type_display() for the pack goods types."""
 
     def get_goods_type_display(self):
         return goods_label(self.goods_type)
 
 
 class ReliefStock(GoodsLabelMixin, models.Model):
-    """Simple relief-goods storage: one row per goods type (rice, pack,
-    ...), holding the quantity currently on hand. It goes up when goods
+    """Simple relief-goods storage: one row per goods type (rice, canned
+    sardines, noodles, paracetamol, water bottles, ... and the four pack
+    types), holding the quantity currently on hand. It goes up when goods
     are stored (cswd_add_relief_stock, cswd_add_donation) and down
     whenever a ReliefDistribution record is created
     (cswd_record_relief). There is no separate movement history."""
 
     goods_type = models.CharField(max_length=100, unique=True)
+    # Unit the quantity is counted in: "kg" for rice, "pcs" for canned
+    # goods, "pack" for the assembled relief packs, etc. Free text so CSWD
+    # can add any new item with its own unit (Inventory tab).
+    unit = models.CharField(max_length=20, default="pcs")
+    # "Good for": the pack this item is meant for ("rice pack", "food pack",
+    # "medicine pack" or "water pack"), chosen when the item is added or
+    # donated, so the Inventory can show just the items for the pack being
+    # made. Blank for the pack types themselves and for older items.
+    category = models.CharField(max_length=20, blank=True, default="")
     quantity = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -560,14 +605,82 @@ class ReliefStock(GoodsLabelMixin, models.Model):
         ordering = ["goods_type"]
 
     def __str__(self):
-        return f"{self.get_goods_type_display()}: {self.quantity} left"
+        return f"{self.get_goods_type_display()}: {self.quantity} {self.unit} left"
+
+
+# Units the two built-in goods are counted in. Used when their rows are
+# first created (and to fix rows created before units existed).
+DEFAULT_UNITS = {g: "pack" for g in GOODS_TYPES}
+
+
+class PackComponent(models.Model):
+    """One line of the standard relief-pack recipe: how much of an
+    inventory item goes into ONE pack (e.g. 2 pcs of canned sardines).
+    CSWD edits the recipe from the Pack Builder in Relief Distribution and
+    then assembles packs: assembling N packs of a pack type deducts
+    quantity_per_pack x N of every component whose category belongs to that
+    pack type and adds N to that pack type's stock."""
+
+    item = models.OneToOneField(
+        ReliefStock, on_delete=models.CASCADE, related_name="pack_component"
+    )
+    quantity_per_pack = models.PositiveIntegerField(default=1)
+    # Which pack this item goes into: "rice pack", "food pack",
+    # "medicine pack" or "water pack". CSWD chooses it in the Pack Builder
+    # (blank on older rows = food pack).
+    pack_type = models.CharField(max_length=20, blank=True, default="")
+
+    class Meta:
+        ordering = ["item__goods_type"]
+
+    def __str__(self):
+        return f"{self.quantity_per_pack} {self.item.unit} {self.item.goods_type} per pack"
+
+
+class InventoryMovement(models.Model):
+    """Stock ledger: one row every time the quantity of an inventory item
+    changes, so the inventory shows WHEN things were stored and WHEN they
+    went out, and why. Stock goes IN from donations, restocks, opening
+    stock and finished packs; it goes OUT when items are used to make a
+    pack and when packs are released to a barangay. balance_after is the
+    quantity on hand right after the movement."""
+
+    IN = "in"
+    OUT = "out"
+    MOVEMENT_TYPES = [(IN, "Stored"), (OUT, "Out")]
+    REASONS = [
+        ("donation", "Donation"),
+        ("restock", "Restock"),
+        ("initial", "Opening stock"),
+        ("pack_made", "Pack made"),
+        ("packed", "Used in a pack"),
+        ("released", "Released to barangay"),
+        ("purchase", "Relief purchase"),
+        ("adjustment", "Stock adjustment"),
+    ]
+
+    item = models.ForeignKey(ReliefStock, on_delete=models.CASCADE, related_name="movements")
+    movement_type = models.CharField(max_length=3, choices=MOVEMENT_TYPES)
+    reason = models.CharField(max_length=20, choices=REASONS)
+    quantity = models.PositiveIntegerField()
+    balance_after = models.PositiveIntegerField(default=0)
+    details = models.CharField(max_length=255, blank=True, default="")
+    recorded_by = models.CharField(max_length=100, blank=True, default="")
+    moved_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-moved_at", "-id"]
+
+    def __str__(self):
+        sign = "+" if self.movement_type == self.IN else "-"
+        return f"{self.item.goods_type} {sign}{self.quantity} ({self.reason})"
 
 
 class ReliefDistribution(GoodsLabelMixin, models.Model):
     """Matches the ERD's relief_distribution entity (household_id,
     disaster_type_id, quantity_given, distribution_date, tracking_number,
     claim_status), with one addition: goods_type, so a release is either
-    "rice" or "pack" and can be matched back against ReliefStock. Creating
+    one of the four pack types and can be matched back against ReliefStock. Creating
     one of these deducts quantity_given from the matching ReliefStock row
     — see cswd_record_relief.
 
@@ -630,7 +743,7 @@ class ReliefDistribution(GoodsLabelMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.tracking_number:
-            self.tracking_number = f"RD-{timezone.now().strftime('%Y%m%d%H%M%S')}-{random.randint(100, 999)}"
+            self.tracking_number = f"RD-{timezone.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12].upper()}"
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -682,3 +795,212 @@ class EvacuationRoute(models.Model):
 
     def __str__(self):
         return f"{self.start_location} → {self.evacuation_center.name}"
+
+
+# ---------------------------------------------------------------------------
+# Cash donations and relief-goods purchasing
+# ---------------------------------------------------------------------------
+from decimal import Decimal
+from django.core.files.storage import FileSystemStorage
+from django.conf import settings as _settings
+from pathlib import Path as _Path
+
+
+def _receipt_root():
+    """Receipts live OUTSIDE MEDIA_ROOT and are never served by a static/media
+    URL; they are streamed only through the authenticated receipt view."""
+    root = getattr(_settings, "RECEIPT_STORAGE_ROOT", None)
+    if not root:
+        root = _Path(_settings.BASE_DIR) / "private_receipts"
+    return str(root)
+
+
+class PrivateReceiptStorage(FileSystemStorage):
+    """Private receipt storage. The folder is read from settings every time it
+    is used (not frozen at import), and there is no public URL."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["base_url"] = None  # no public URL
+        super().__init__(*args, **kwargs)
+
+    def url(self, name):
+        raise ValueError("Receipts are private and have no public URL.")
+
+    @property
+    def base_location(self):
+        return _receipt_root()
+
+    @property
+    def location(self):
+        import os
+        return os.path.abspath(_receipt_root())
+
+    def deconstruct(self):  # keep migrations independent of the machine's path
+        return (f"{self.__class__.__module__}.{self.__class__.__name__}", [], {})
+
+
+def receipt_storage():
+    return PrivateReceiptStorage()
+
+
+def _check(q, name):
+    """CheckConstraint that works on Django 4.2/5.0 (check=) and 5.1+ (condition=)."""
+    try:
+        return models.CheckConstraint(condition=q, name=name)
+    except TypeError:
+        return models.CheckConstraint(check=q, name=name)
+
+
+def _new_code(prefix):
+    return f"{prefix}-{timezone.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}"
+
+
+class CashFund(models.Model):
+    """Single row (pk=1) used ONLY as a lock: every cash donation or purchase
+    does select_for_update() on it, so two simultaneous requests can never
+    spend the same balance. Money amounts are never stored here — the balance
+    is always computed from CashTransaction rows."""
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class CashDonation(models.Model):
+    request_id = models.UUIDField(unique=True)  # client idempotency key
+    transaction_code = models.CharField(max_length=40, unique=True, default="", blank=True)
+    donor_name = models.CharField(max_length=150)
+    contact_num = models.CharField(max_length=20, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    donation_date = models.DateField()
+    reference_number = models.CharField(max_length=60, blank=True, default="")
+    disaster_type = models.ForeignKey(
+        DisasterType, on_delete=models.SET_NULL, null=True, blank=True, related_name="cash_donations"
+    )
+    remarks = models.CharField(max_length=255, blank=True, default="")
+    recorded_by = models.CharField(max_length=150)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-donation_date", "-id"]
+        constraints = [
+            _check(models.Q(amount__gt=0), "cashdonation_amount_gt_0"),
+            models.UniqueConstraint(
+                fields=["reference_number"],
+                condition=~models.Q(reference_number=""),
+                name="cashdonation_reference_unique_when_set",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.transaction_code:
+            self.transaction_code = _new_code("CD")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.transaction_code} {self.donor_name} PHP {self.amount}"
+
+
+class CashPurchase(models.Model):
+    request_id = models.UUIDField(unique=True)  # client idempotency key
+    purchase_code = models.CharField(max_length=40, unique=True, default="", blank=True)
+    supplier_name = models.CharField(max_length=150)
+    purchase_date = models.DateField()
+    receipt_reference = models.CharField(max_length=60)  # official receipt no.
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2)
+    receipt_file = models.FileField(upload_to="receipts/", storage=receipt_storage, max_length=200)
+    receipt_original_name = models.CharField(max_length=200, blank=True, default="")
+    receipt_content_type = models.CharField(max_length=50, blank=True, default="")
+    remarks = models.CharField(max_length=255, blank=True, default="")
+    recorded_by = models.CharField(max_length=150)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-purchase_date", "-id"]
+        constraints = [
+            _check(models.Q(total_cost__gt=0), "cashpurchase_total_gt_0"),
+            models.UniqueConstraint(
+                fields=["supplier_name", "receipt_reference"], name="cashpurchase_supplier_or_unique"
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.purchase_code:
+            self.purchase_code = _new_code("RP")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.purchase_code} {self.supplier_name} PHP {self.total_cost}"
+
+
+class CashPurchaseItem(models.Model):
+    purchase = models.ForeignKey(CashPurchase, on_delete=models.CASCADE, related_name="items")
+    stock = models.ForeignKey(ReliefStock, on_delete=models.PROTECT, related_name="purchase_items")
+    item_name = models.CharField(max_length=100)  # snapshot at purchase time
+    quantity = models.PositiveIntegerField()
+    unit = models.CharField(max_length=20)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            _check(models.Q(quantity__gt=0), "purchaseitem_qty_gt_0"),
+            _check(models.Q(unit_price__gt=0), "purchaseitem_price_gt_0"),
+        ]
+
+
+class CashTransaction(models.Model):
+    """Ledger. Exactly one of `donation` / `purchase` is set. amount is always
+    positive; `kind` says whether it is money in or out."""
+
+    IN = "in"
+    OUT = "out"
+    KIND_CHOICES = [(IN, "Cash in"), (OUT, "Cash out")]
+
+    kind = models.CharField(max_length=3, choices=KIND_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
+    donation = models.OneToOneField(CashDonation, on_delete=models.PROTECT, null=True, blank=True, related_name="ledger_entry")
+    purchase = models.OneToOneField(CashPurchase, on_delete=models.PROTECT, null=True, blank=True, related_name="ledger_entry")
+    description = models.CharField(max_length=255, blank=True, default="")
+    recorded_by = models.CharField(max_length=150)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-id"]
+        constraints = [
+            _check(models.Q(amount__gt=0), "cashtx_amount_gt_0"),
+            _check(
+                models.Q(kind="in", donation__isnull=False, purchase__isnull=True)
+                | models.Q(kind="out", donation__isnull=True, purchase__isnull=False),
+                "cashtx_kind_matches_source",
+            ),
+        ]
+
+
+class EmergencyHotline(models.Model):
+    """Official DRRM emergency hotline shown to residents. Single row (pk=1)."""
+
+    phone_number = models.CharField(max_length=30)
+    updated_by = models.CharField(max_length=150, blank=True, default="")
+    updated_at = models.DateTimeField(default=timezone.now)
+
+
+class EmergencyContact(models.Model):
+    """Emergency number managed by DRRM and shown to residents in the mobile app."""
+
+    CATEGORY_CHOICES = [
+        ("drrm", "DRRM / CDRRMO"),
+        ("police", "Police"),
+        ("fire", "Fire Department"),
+        ("hospital", "Hospital / Medical"),
+        ("rescue", "Rescue / Ambulance"),
+        ("other", "Other"),
+    ]
+    name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=30)
+    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES, default="other")
+    updated_by = models.CharField(max_length=150, blank=True, default="")
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["category", "name"]
