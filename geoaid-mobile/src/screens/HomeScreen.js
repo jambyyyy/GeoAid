@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -14,14 +13,14 @@ import { WebView } from "react-native-webview";
 
 import MobileShell from "../components/MobileShell";
 import BottomNav from "../components/BottomNav";
-import {
-  QRIcon,
-  ClockIcon,
-  PinIcon,
-  PhoneIcon,
-} from "../components/icons";
+import { QRIcon, ClockIcon, PinIcon, PhoneIcon } from "../components/icons";
 import { API_BASE } from "../api";
 import { mergeResidentStyles } from "../residentPolish";
+import {
+  loadReliefAlerts,
+  markReliefSeen,
+  RELIEF_POLL_MS,
+} from "../reliefNotifications";
 
 // Do not display fictional evacuation information when offline.
 const FALLBACK_DATA = {
@@ -152,6 +151,8 @@ function HomeScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [activeTab, setActiveTab] = useState("home");
   const [reliefStatus, setReliefStatus] = useState(null);
+  // New relief updates the resident has not been told about yet.
+  const [reliefAlerts, setReliefAlerts] = useState([]);
 
   const [previewCenter, setPreviewCenter] = useState(null);
   const [previewState, setPreviewState] = useState("idle");
@@ -172,8 +173,8 @@ function HomeScreen({ navigation }) {
 
         const response = await fetch(
           `${API_BASE}/api/resident/dashboard/?mobile_number=${encodeURIComponent(
-            mobileNumber
-          )}`
+            mobileNumber,
+          )}`,
         );
 
         if (!response.ok) {
@@ -201,34 +202,18 @@ function HomeScreen({ navigation }) {
     };
   }, []);
 
-  // Refresh relief status whenever residents return to Home.
+  // Refresh relief status (and any new-relief alert) whenever residents
+  // return to Home, and re-check every 30s while Home is on screen.
   useEffect(() => {
     let active = true;
 
     const refreshRelief = async () => {
       try {
-        const mobileNumber =
-          (await AsyncStorage.getItem("geoaid_resident_mobile")) || "";
-
-        if (!mobileNumber) {
-          if (active) setReliefStatus(null);
-          return;
-        }
-
-        const response = await fetch(
-          `${API_BASE}/api/resident/relief-distribution/?mobile_number=${encodeURIComponent(
-            mobileNumber
-          )}`
-        );
-
-        if (!response.ok) {
-          throw new Error("Relief status unavailable");
-        }
-
-        const json = await response.json();
+        const { status, alerts } = await loadReliefAlerts();
 
         if (active) {
-          setReliefStatus(json.status || null);
+          setReliefStatus(status);
+          setReliefAlerts(alerts);
         }
       } catch {
         if (active) {
@@ -242,10 +227,15 @@ function HomeScreen({ navigation }) {
       refreshRelief();
     });
 
+    const timer = setInterval(() => {
+      if (navigation.isFocused()) refreshRelief();
+    }, RELIEF_POLL_MS);
+
     refreshRelief();
 
     return () => {
       active = false;
+      clearInterval(timer);
       unsubscribe();
     };
   }, [navigation]);
@@ -280,19 +270,14 @@ function HomeScreen({ navigation }) {
         const json = await response.json();
 
         const center = (json.centers || []).find(
-          (item) =>
-            String(item.id) === String(recommendedCenterId)
+          (item) => String(item.id) === String(recommendedCenterId),
         );
 
         const latitude =
-          center?.latitude == null
-            ? NaN
-            : Number(center.latitude);
+          center?.latitude == null ? NaN : Number(center.latitude);
 
         const longitude =
-          center?.longitude == null
-            ? NaN
-            : Number(center.longitude);
+          center?.longitude == null ? NaN : Number(center.longitude);
 
         if (
           !center ||
@@ -334,7 +319,7 @@ function HomeScreen({ navigation }) {
 
     return buildCenterMiniMapHtml(
       previewCenter.latitude,
-      previewCenter.longitude
+      previewCenter.longitude,
     );
   }, [previewCenter?.latitude, previewCenter?.longitude]);
 
@@ -343,17 +328,14 @@ function HomeScreen({ navigation }) {
       <MobileShell>
         <SafeAreaView style={styles.loading} edges={["top"]}>
           <ActivityIndicator size="large" color="#2563eb" />
-          <Text style={styles.loadingText}>
-            Loading your dashboard...
-          </Text>
+          <Text style={styles.loadingText}>Loading your dashboard...</Text>
         </SafeAreaView>
       </MobileShell>
     );
   }
 
   const householdName = data.household_name || "Your Household";
-  const nearestCenter =
-    data.nearest_center || FALLBACK_DATA.nearest_center;
+  const nearestCenter = data.nearest_center || FALLBACK_DATA.nearest_center;
 
   const hasCenter = Boolean(nearestCenter.id);
 
@@ -366,9 +348,9 @@ function HomeScreen({ navigation }) {
             Math.round(
               (Number(nearestCenter.occupancy || 0) /
                 Number(nearestCenter.capacity)) *
-                100
-            )
-          )
+                100,
+            ),
+          ),
         )
       : 0;
 
@@ -377,13 +359,27 @@ function HomeScreen({ navigation }) {
   const routeDescription =
     hasCenter && nearestCenter.distance_km != null
       ? `About ${nearestCenter.distance_km} km (DRRM estimate from your ${
-          nearestCenter.start_source === "household_gps" ? "saved household location" : "barangay location"
+          nearestCenter.start_source === "household_gps"
+            ? "saved household location"
+            : "barangay location"
         })${
           nearestCenter.walk_minutes != null
             ? ` · about ${nearestCenter.walk_minutes} min`
             : ""
         }. Open the map for road distance from your GPS.`
       : "Check the map for available evacuation centers.";
+
+  const topAlert = reliefAlerts[0] || null;
+
+  const dismissReliefAlerts = () => {
+    markReliefSeen(reliefAlerts);
+    setReliefAlerts([]);
+  };
+
+  const openReliefFromAlert = () => {
+    dismissReliefAlerts();
+    navigation.navigate("ReliefDistribution");
+  };
 
   const handleTabSelect = (tab) => {
     if (tab === "profile") {
@@ -425,6 +421,60 @@ function HomeScreen({ navigation }) {
           showsVerticalScrollIndicator={false}
           bounces
         >
+          {/* NEW RELIEF NOTIFICATION */}
+          {topAlert && (
+            <View
+              style={[
+                styles.alertBanner,
+                topAlert.stage === "ready" && styles.alertBannerReady,
+              ]}
+              accessibilityRole="alert"
+            >
+              <TouchableOpacity
+                style={styles.alertBannerMain}
+                onPress={openReliefFromAlert}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`${topAlert.title}. View relief details`}
+              >
+                <Text style={styles.alertBannerIcon}>
+                  {topAlert.stage === "ready" ? "✅" : "📦"}
+                </Text>
+                <View style={styles.alertBannerText}>
+                  <Text
+                    style={[
+                      styles.alertBannerTitle,
+                      topAlert.stage === "ready" &&
+                        styles.alertBannerTitleReady,
+                    ]}
+                  >
+                    {topAlert.title}
+                  </Text>
+                  <Text style={styles.alertBannerMessage}>
+                    {topAlert.message}
+                  </Text>
+                  {reliefAlerts.length > 1 && (
+                    <Text style={styles.alertBannerMore}>
+                      +{reliefAlerts.length - 1} more relief update
+                      {reliefAlerts.length - 1 > 1 ? "s" : ""}
+                    </Text>
+                  )}
+                  <Text style={styles.alertBannerLink}>View details →</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={dismissReliefAlerts}
+                style={styles.alertBannerClose}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss relief notification"
+              >
+                <Text style={styles.alertBannerCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* EXISTING QUICK ACTIONS */}
           <View style={styles.quickActions}>
             <TouchableOpacity
@@ -435,27 +485,18 @@ function HomeScreen({ navigation }) {
               accessibilityLabel="Open My QR Code"
             >
               <QRIcon />
-              <Text style={styles.quickActionLabel}>
-                My QR Code
-              </Text>
+              <Text style={styles.quickActionLabel}>My QR Code</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.quickAction,
-                styles.registrationAction,
-              ]}
-              onPress={() =>
-                navigation.navigate("RegistrationStatus")
-              }
+              style={[styles.quickAction, styles.registrationAction]}
+              onPress={() => navigation.navigate("RegistrationStatus")}
               activeOpacity={0.8}
               accessibilityRole="button"
               accessibilityLabel="Check Registration Status"
             >
               <ClockIcon />
-              <Text style={styles.quickActionLabel}>
-                Registration
-              </Text>
+              <Text style={styles.quickActionLabel}>Registration</Text>
             </TouchableOpacity>
           </View>
 
@@ -485,9 +526,7 @@ function HomeScreen({ navigation }) {
           {/* HIGHLIGHTED RELIEF DISTRIBUTION */}
           <TouchableOpacity
             style={styles.reliefAction}
-            onPress={() =>
-              navigation.navigate("ReliefDistribution")
-            }
+            onPress={() => navigation.navigate("ReliefDistribution")}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel="View household relief goods, pickup status and distribution history"
@@ -509,9 +548,8 @@ function HomeScreen({ navigation }) {
             </Text>
 
             <Text style={[styles.reliefActionSubtitle, { color: "#eff6ff" }]}>
-              Check relief goods allocated to your household,
-              find out if they are ready for pickup, and view
-              your distribution history.
+              Check relief goods allocated to your household, find out if they
+              are ready for pickup, and view your distribution history.
             </Text>
 
             <View style={styles.reliefStatusRow}>
@@ -527,9 +565,7 @@ function HomeScreen({ navigation }) {
             </View>
 
             <View style={styles.reliefCta}>
-              <Text style={styles.reliefCtaText}>
-                View My Relief Goods
-              </Text>
+              <Text style={styles.reliefCtaText}>View My Relief Goods</Text>
               <Text style={styles.reliefCtaArrow}>→</Text>
             </View>
           </TouchableOpacity>
@@ -545,18 +581,13 @@ function HomeScreen({ navigation }) {
             <View style={styles.centerPanel}>
               <View style={styles.centerTop}>
                 <View style={styles.centerInfo}>
-                  <Text
-                    style={styles.centerName}
-                    numberOfLines={2}
-                  >
+                  <Text style={styles.centerName} numberOfLines={2}>
                     {hasCenter
                       ? nearestCenter.name
                       : "Center information unavailable"}
                   </Text>
 
-                  <Text style={styles.centerMeta}>
-                    {routeDescription}
-                  </Text>
+                  <Text style={styles.centerMeta}>{routeDescription}</Text>
                 </View>
 
                 <View
@@ -565,9 +596,7 @@ function HomeScreen({ navigation }) {
                     nearestCenter.status === "closed" &&
                       styles.statusPillClosed,
                     (!hasCenter ||
-                      !["open", "closed"].includes(
-                        nearestCenter.status
-                      )) &&
+                      !["open", "closed"].includes(nearestCenter.status)) &&
                       styles.statusPillUnknown,
                   ]}
                 >
@@ -577,16 +606,13 @@ function HomeScreen({ navigation }) {
                       nearestCenter.status === "closed" &&
                         styles.statusPillTextClosed,
                       (!hasCenter ||
-                        !["open", "closed"].includes(
-                          nearestCenter.status
-                        )) &&
+                        !["open", "closed"].includes(nearestCenter.status)) &&
                         styles.statusPillTextUnknown,
                     ]}
                   >
                     {hasCenter && nearestCenter.status === "open"
                       ? "OPEN"
-                      : hasCenter &&
-                          nearestCenter.status === "closed"
+                      : hasCenter && nearestCenter.status === "closed"
                         ? "CLOSED"
                         : "UNKNOWN"}
                   </Text>
@@ -619,10 +645,7 @@ function HomeScreen({ navigation }) {
                 ) : (
                   <View style={styles.miniMapUnavailable}>
                     {previewState === "loading" ? (
-                      <ActivityIndicator
-                        size="small"
-                        color="#2563eb"
-                      />
+                      <ActivityIndicator size="small" color="#2563eb" />
                     ) : (
                       <PinIcon color="#64748b" />
                     )}
@@ -646,9 +669,7 @@ function HomeScreen({ navigation }) {
 
               {/* OCCUPANCY */}
               <View style={styles.occupancyRow}>
-                <Text style={styles.occupancyLabel}>
-                  Center Occupancy
-                </Text>
+                <Text style={styles.occupancyLabel}>Center Occupancy</Text>
 
                 <Text style={styles.occupancyValue}>
                   {hasCenter && nearestCenter.capacity
@@ -659,17 +680,14 @@ function HomeScreen({ navigation }) {
 
               <View style={styles.occupancyBar}>
                 <View
-                  style={[
-                    styles.occupancyFill,
-                    { width: `${occupancyPct}%` },
-                  ]}
+                  style={[styles.occupancyFill, { width: `${occupancyPct}%` }]}
                 />
               </View>
 
               <Text style={styles.centerSafetyNote}>
-                GeoAid uses recorded DRRM information for its
-                recommendation. Check official advisories for
-                current road and evacuation safety.
+                GeoAid uses recorded DRRM information for its recommendation.
+                Check official advisories for current road and evacuation
+                safety.
               </Text>
 
               {/* KEEP VIEW ROUTE BUTTON PROMINENT */}
@@ -683,9 +701,7 @@ function HomeScreen({ navigation }) {
                 <PinIcon color="#ffffff" />
 
                 <Text style={styles.directionsBtnText}>
-                  {hasCenter
-                    ? "View Route on Map"
-                    : "View Evacuation Map"}
+                  {hasCenter ? "View Route on Map" : "View Evacuation Map"}
                 </Text>
 
                 <Text style={styles.directionsArrow}>→</Text>
@@ -702,9 +718,7 @@ function HomeScreen({ navigation }) {
             accessibilityLabel="Find recommended evacuation directions"
           >
             <View style={styles.routeTextContainer}>
-              <Text style={styles.routeActionTitle}>
-                Evacuation Directions
-              </Text>
+              <Text style={styles.routeActionTitle}>Evacuation Directions</Text>
               <Text style={styles.routeActionSubtitle}>
                 Explore evacuation centers and compare route options
               </Text>
@@ -713,10 +727,7 @@ function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </ScrollView>
 
-        <BottomNav
-          active={activeTab}
-          onSelect={handleTabSelect}
-        />
+        <BottomNav active={activeTab} onSelect={handleTabSelect} />
       </SafeAreaView>
     </MobileShell>
   );
@@ -776,6 +787,73 @@ const styles = StyleSheet.create(
         paddingBottom: 30,
         gap: 16,
         flexGrow: 0,
+      },
+
+      // NEW RELIEF NOTIFICATION BANNER
+      alertBanner: {
+        width: "100%",
+        flexDirection: "row",
+        alignItems: "flex-start",
+        backgroundColor: "#eff6ff",
+        borderWidth: 1,
+        borderColor: "#93c5fd",
+        borderRadius: 14,
+        paddingVertical: 12,
+        paddingLeft: 13,
+        paddingRight: 8,
+      },
+      alertBannerReady: {
+        backgroundColor: "#f0fdf4",
+        borderColor: "#86efac",
+      },
+      alertBannerMain: {
+        flex: 1,
+        minWidth: 0,
+        flexDirection: "row",
+        gap: 10,
+      },
+      alertBannerIcon: {
+        fontSize: 22,
+        lineHeight: 28,
+      },
+      alertBannerText: {
+        flex: 1,
+        minWidth: 0,
+      },
+      alertBannerTitle: {
+        fontSize: 14,
+        lineHeight: 20,
+        fontWeight: "800",
+        color: "#1d4ed8",
+      },
+      alertBannerTitleReady: {
+        color: "#166534",
+      },
+      alertBannerMessage: {
+        fontSize: 12,
+        lineHeight: 18,
+        color: "#334155",
+        marginTop: 2,
+      },
+      alertBannerMore: {
+        fontSize: 11,
+        lineHeight: 16,
+        color: "#64748b",
+        marginTop: 4,
+      },
+      alertBannerLink: {
+        fontSize: 12,
+        fontWeight: "800",
+        color: "#1d4ed8",
+        marginTop: 6,
+      },
+      alertBannerClose: {
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+      },
+      alertBannerCloseText: {
+        fontSize: 15,
+        color: "#64748b",
       },
 
       // QUICK ACTIONS
@@ -1180,8 +1258,8 @@ const styles = StyleSheet.create(
         marginLeft: 9,
       },
     },
-    "home"
-  )
+    "home",
+  ),
 );
 
 export default HomeScreen;

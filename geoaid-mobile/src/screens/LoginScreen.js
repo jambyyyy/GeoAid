@@ -62,7 +62,11 @@ function LoginScreen({ navigation, route }) {
       const data = await response.json();
 
       if (!response.ok) {
-        if (data.status === "pending" || data.status === "rejected" || data.status === "incomplete") {
+        if (
+          data.status === "pending" ||
+          data.status === "rejected" ||
+          data.status === "incomplete"
+        ) {
           setNoticeTone(data.status === "rejected" ? "warning" : "info");
           setNotice(data.message || "Your account isn't ready to sign in yet.");
         } else {
@@ -71,7 +75,10 @@ function LoginScreen({ navigation, route }) {
         return;
       }
 
-      await AsyncStorage.setItem("geoaid_resident_mobile", `+63${trimmedMobile}`);
+      await AsyncStorage.setItem(
+        "geoaid_resident_mobile",
+        `+63${trimmedMobile}`,
+      );
       navigation.replace("Home");
     } catch (err) {
       console.error(err);
@@ -84,137 +91,203 @@ function LoginScreen({ navigation, route }) {
   return (
     <MobileShell>
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
-        <BrandMark subtitle="Iligan City DRRM" />
+        <ScrollView
+          contentContainerStyle={styles.screen}
+          keyboardShouldPersistTaps="handled"
+        >
+          <BrandMark subtitle="Iligan City DRRM" />
 
-        <Text style={styles.heading}>Welcome back</Text>
-        <Text style={styles.subheading}>Sign in to access your household dashboard</Text>
+          <Text style={styles.heading}>Welcome back</Text>
+          <Text style={styles.subheading}>
+            Sign in to access your household dashboard
+          </Text>
 
-        <View style={styles.form}>
-          {notice ? (
-            <View style={[styles.notice, noticeTone === "warning" ? styles.noticeWarning : styles.noticeInfo]}>
-              <Text style={noticeTone === "warning" ? styles.noticeTextWarning : styles.noticeTextInfo}>
-                {notice}
-              </Text>
+          <View style={styles.form}>
+            {notice ? (
+              <View
+                style={[
+                  styles.notice,
+                  noticeTone === "warning"
+                    ? styles.noticeWarning
+                    : styles.noticeInfo,
+                ]}
+              >
+                <Text
+                  style={
+                    noticeTone === "warning"
+                      ? styles.noticeTextWarning
+                      : styles.noticeTextInfo
+                  }
+                >
+                  {notice}
+                </Text>
+              </View>
+            ) : null}
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.label}>Mobile Number</Text>
+            <View style={styles.mobileWrap}>
+              <Text style={styles.mobilePrefix}>+63</Text>
+              <TextInput
+                style={styles.mobileInput}
+                placeholder="9172345678"
+                keyboardType="phone-pad"
+                value={mobile}
+                onChangeText={(value) =>
+                  setMobile(
+                    value
+                      .replace(/\D/g, "")
+                      .replace(/^63(?=9)/, "")
+                      .replace(/^0(?=9)/, "")
+                      .slice(0, 10),
+                  )
+                }
+                editable={!isSubmitting}
+              />
             </View>
-          ) : null}
-          {error ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
+
+            <Text style={styles.label}>Password</Text>
+            <View style={styles.passwordWrap}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Enter your password"
+                secureTextEntry={!showPassword}
+                value={password}
+                onChangeText={setPassword}
+                editable={!isSubmitting}
+              />
+              <TouchableOpacity
+                style={styles.eyeToggle}
+                onPress={() => setShowPassword((v) => !v)}
+                accessibilityLabel={
+                  showPassword ? "Hide password" : "Show password"
+                }
+              >
+                <EyeIcon off={showPassword} />
+              </TouchableOpacity>
             </View>
-          ) : null}
 
-          <Text style={styles.label}>Mobile Number</Text>
-          <View style={styles.mobileWrap}>
-            <Text style={styles.mobilePrefix}>+63</Text>
-            <TextInput
-              style={styles.mobileInput}
-              placeholder="9172345678"
-              keyboardType="phone-pad"
-              value={mobile}
-              onChangeText={(value) => setMobile(value.replace(/\D/g, "").replace(/^63(?=9)/, "").replace(/^0(?=9)/, "").slice(0, 10))}
-              editable={!isSubmitting}
-            />
-          </View>
-
-          <Text style={styles.label}>Password</Text>
-          <View style={styles.passwordWrap}>
-            <TextInput
-              style={styles.passwordInput}
-              placeholder="Enter your password"
-              secureTextEntry={!showPassword}
-              value={password}
-              onChangeText={setPassword}
-              editable={!isSubmitting}
-            />
             <TouchableOpacity
-              style={styles.eyeToggle}
-              onPress={() => setShowPassword((v) => !v)}
-              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+              style={[styles.signinBtn, isSubmitting && styles.btnDisabled]}
+              onPress={handleSubmit}
+              disabled={isSubmitting}
             >
-              <EyeIcon off={showPassword} />
+              <Text style={styles.signinBtnText}>
+                {isSubmitting ? "Signing in..." : "Sign In"}
+              </Text>
             </TouchableOpacity>
           </View>
 
-          <View style={styles.forgotRow}>
-            <Text style={styles.forgotHelp}>Need login help? Contact your Barangay staff.</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.footerRow}
+            onPress={() => navigation.navigate("Register")}
+          >
+            <Text style={styles.footerText}>
+              Not registered yet?{" "}
+              <Text style={styles.footerLink}>Create account</Text>
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.signinBtn, isSubmitting && styles.btnDisabled]}
-            onPress={handleSubmit}
-            disabled={isSubmitting}
+            style={styles.footerRow}
+            onPress={() => navigation.navigate("StaffLogin")}
           >
-            <Text style={styles.signinBtnText}>{isSubmitting ? "Signing in..." : "Sign In"}</Text>
+            <Text style={styles.footerText}>
+              Barangay staff?{" "}
+              <Text style={styles.footerLink}>Sign in here</Text>
+            </Text>
           </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity style={styles.footerRow} onPress={() => navigation.navigate("Register")}>
-          <Text style={styles.footerText}>
-            Not registered yet? <Text style={styles.footerLink}>Create account</Text>
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.footerRow} onPress={() => navigation.navigate("StaffLogin")}>
-          <Text style={styles.footerText}>
-            Barangay staff? <Text style={styles.footerLink}>Sign in here</Text>
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
       </SafeAreaView>
     </MobileShell>
   );
 }
 
-const styles = StyleSheet.create(mergeResidentStyles({
-  safe: { flex: 1 },
-  screen: { padding: 20, paddingBottom: 40 },
-  heading: { fontSize: 22, fontWeight: "700", textAlign: "center", marginTop: 12, color: "#0f172a" },
-  subheading: { fontSize: 13, color: "#64748b", textAlign: "center", marginTop: 4, marginBottom: 20 },
-  form: {},
-  notice: { padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1 },
-  noticeInfo: { backgroundColor: "#eaf3ff", borderColor: "#bcdcff" },
-  noticeWarning: { backgroundColor: "#fff4e5", borderColor: "#ffdca8" },
-  noticeTextInfo: { color: "#2563eb", fontSize: 14, lineHeight: 20 },
-  noticeTextWarning: { color: "#8a5a00", fontSize: 14, lineHeight: 20 },
-  errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
-  errorText: { color: "#b42318", fontSize: 13 },
-  label: { fontSize: 13, fontWeight: "600", color: "#374151", marginBottom: 6, marginTop: 12 },
-  mobileWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-  },
-  mobilePrefix: { fontSize: 15, color: "#374151", marginRight: 6 },
-  mobileInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
-  passwordWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-  },
-  passwordInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
-  eyeToggle: { padding: 4 },
-  forgotRow: { alignItems: "flex-end", marginTop: 8 },
-  forgotLink: { fontSize: 13, color: "#2563eb" },
-  forgotHelp: { fontSize: 13, lineHeight: 19, color: "#64748b", textAlign: "right" },
-  signinBtn: {
-    backgroundColor: "#2563eb",
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginTop: 20,
-  },
-  btnDisabled: { opacity: 0.6 },
-  signinBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-  footerRow: { marginTop: 24, alignItems: "center" },
-  footerText: { fontSize: 13, color: "#64748b" },
-  footerLink: { color: "#2563eb", fontWeight: "600" },
-}, "login"));
+const styles = StyleSheet.create(
+  mergeResidentStyles(
+    {
+      safe: { flex: 1 },
+      screen: { padding: 20, paddingBottom: 40 },
+      heading: {
+        fontSize: 22,
+        fontWeight: "700",
+        textAlign: "center",
+        marginTop: 12,
+        color: "#0f172a",
+      },
+      subheading: {
+        fontSize: 13,
+        color: "#64748b",
+        textAlign: "center",
+        marginTop: 4,
+        marginBottom: 20,
+      },
+      form: {},
+      notice: {
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 12,
+        borderWidth: 1,
+      },
+      noticeInfo: { backgroundColor: "#eaf3ff", borderColor: "#bcdcff" },
+      noticeWarning: { backgroundColor: "#fff4e5", borderColor: "#ffdca8" },
+      noticeTextInfo: { color: "#2563eb", fontSize: 14, lineHeight: 20 },
+      noticeTextWarning: { color: "#8a5a00", fontSize: 14, lineHeight: 20 },
+      errorBox: {
+        backgroundColor: "#fdecec",
+        borderWidth: 1,
+        borderColor: "#f5b5b5",
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 12,
+      },
+      errorText: { color: "#b42318", fontSize: 13 },
+      label: {
+        fontSize: 13,
+        fontWeight: "600",
+        color: "#374151",
+        marginBottom: 6,
+        marginTop: 12,
+      },
+      mobileWrap: {
+        flexDirection: "row",
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: "#d1d5db",
+        borderRadius: 10,
+        paddingHorizontal: 12,
+      },
+      mobilePrefix: { fontSize: 15, color: "#374151", marginRight: 6 },
+      mobileInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
+      passwordWrap: {
+        flexDirection: "row",
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: "#d1d5db",
+        borderRadius: 10,
+        paddingHorizontal: 12,
+      },
+      passwordInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
+      eyeToggle: { padding: 4 },
+      signinBtn: {
+        backgroundColor: "#2563eb",
+        borderRadius: 10,
+        paddingVertical: 14,
+        alignItems: "center",
+        marginTop: 20,
+      },
+      btnDisabled: { opacity: 0.6 },
+      signinBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+      footerRow: { marginTop: 24, alignItems: "center" },
+      footerText: { fontSize: 13, color: "#64748b" },
+      footerLink: { color: "#2563eb", fontWeight: "600" },
+    },
+    "login",
+  ),
+);
 
 export default LoginScreen;

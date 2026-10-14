@@ -1,5 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, RefreshControl } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  RefreshControl,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../src/components/MobileShell";
 import { QRIcon, PinIcon, ClockIcon } from "../src/components/icons";
@@ -9,7 +17,13 @@ import { API_BASE } from "../src/api";
 // no EvacuationCenter row exists for this barangay yet in Django admin).
 const FALLBACK_DATA = {
   staff_name: "Barangay Staff",
-  evacuation_center: { id: 0, name: "No center set up yet", occupancy: 0, capacity: 1, status: "closed" },
+  evacuation_center: {
+    id: 0,
+    name: "No center set up yet",
+    occupancy: 0,
+    capacity: 1,
+    status: "closed",
+  },
   today_checkins: 0,
   recent_checkins: [],
   disaster_types: [],
@@ -23,10 +37,11 @@ function StaffDashboardScreen({ navigation }) {
   const CHECKINS_PER_PAGE = 5;
 
   const load = useCallback(async () => {
-    const username = (await AsyncStorage.getItem("geoaid_staff_username")) || "";
+    const username =
+      (await AsyncStorage.getItem("geoaid_staff_username")) || "";
     try {
       const response = await fetch(
-        `${API_BASE}/api/barangay/evacuation/dashboard/?username=${encodeURIComponent(username)}`
+        `${API_BASE}/api/barangay/evacuation/dashboard/?username=${encodeURIComponent(username)}`,
       );
       const json = await response.json();
       if (!response.ok) {
@@ -66,19 +81,31 @@ function StaffDashboardScreen({ navigation }) {
     );
   }
 
-  const { staff_name, evacuation_center, today_checkins, recent_checkins = [], disaster_types = [] } = data;
-  const occupancyPct = Math.round((evacuation_center.occupancy / Math.max(1, evacuation_center.capacity)) * 100);
+  const {
+    staff_name,
+    evacuation_center,
+    today_checkins,
+    recent_checkins = [],
+    disaster_types = [],
+  } = data;
+  const occupancyPct = Math.round(
+    (evacuation_center.occupancy / Math.max(1, evacuation_center.capacity)) *
+      100,
+  );
 
-  const totalCheckinsPages = Math.max(1, Math.ceil(recent_checkins.length / CHECKINS_PER_PAGE));
+  const totalCheckinsPages = Math.max(
+    1,
+    Math.ceil(recent_checkins.length / CHECKINS_PER_PAGE),
+  );
   const currentCheckinsPage = Math.min(checkinsPage, totalCheckinsPages - 1);
   const pagedCheckins = recent_checkins.slice(
     currentCheckinsPage * CHECKINS_PER_PAGE,
-    currentCheckinsPage * CHECKINS_PER_PAGE + CHECKINS_PER_PAGE
+    currentCheckinsPage * CHECKINS_PER_PAGE + CHECKINS_PER_PAGE,
   );
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>Signed in as</Text>
@@ -97,7 +124,9 @@ function StaffDashboardScreen({ navigation }) {
 
         <ScrollView
           contentContainerStyle={styles.body}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           {loadError ? (
             <View style={styles.errorBox}>
@@ -106,8 +135,13 @@ function StaffDashboardScreen({ navigation }) {
           ) : null}
 
           <TouchableOpacity
-            style={[styles.scanCard, !evacuation_center.id && styles.scanCardDisabled]}
-            onPress={() => navigation.navigate("Scanner", { disasterTypes: disaster_types })}
+            style={[
+              styles.scanCard,
+              !evacuation_center.id && styles.scanCardDisabled,
+            ]}
+            onPress={() =>
+              navigation.navigate("Scanner", { disasterTypes: disaster_types })
+            }
             disabled={!evacuation_center.id}
           >
             <View style={styles.scanIconWrap}>
@@ -115,7 +149,9 @@ function StaffDashboardScreen({ navigation }) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.scanTitle}>Scan Resident QR Code</Text>
-              <Text style={styles.scanSubtitle}>Check residents in or out at {evacuation_center.name}</Text>
+              <Text style={styles.scanSubtitle}>
+                Check residents in or out at {evacuation_center.name}
+              </Text>
             </View>
           </TouchableOpacity>
 
@@ -145,7 +181,9 @@ function StaffDashboardScreen({ navigation }) {
                 </Text>
               </View>
               <View style={styles.occupancyBar}>
-                <View style={[styles.occupancyFill, { width: `${occupancyPct}%` }]} />
+                <View
+                  style={[styles.occupancyFill, { width: `${occupancyPct}%` }]}
+                />
               </View>
             </View>
           </View>
@@ -160,7 +198,10 @@ function StaffDashboardScreen({ navigation }) {
               <>
                 <View style={styles.list}>
                   {pagedCheckins.map((c, i) => (
-                    <View key={`${c.name}-${currentCheckinsPage}-${i}`} style={styles.checkinRow}>
+                    <View
+                      key={`${c.name}-${currentCheckinsPage}-${i}`}
+                      style={styles.checkinRow}
+                    >
                       <View style={styles.checkinAvatar}>
                         <PinIcon size={16} color="#2563eb" />
                       </View>
@@ -176,7 +217,10 @@ function StaffDashboardScreen({ navigation }) {
                 {totalCheckinsPages > 1 && (
                   <View style={styles.pagerRow}>
                     <TouchableOpacity
-                      style={[styles.pagerBtn, currentCheckinsPage === 0 && styles.pagerBtnDisabled]}
+                      style={[
+                        styles.pagerBtn,
+                        currentCheckinsPage === 0 && styles.pagerBtnDisabled,
+                      ]}
                       onPress={() => setCheckinsPage((p) => Math.max(0, p - 1))}
                       disabled={currentCheckinsPage === 0}
                     >
@@ -188,9 +232,14 @@ function StaffDashboardScreen({ navigation }) {
                     <TouchableOpacity
                       style={[
                         styles.pagerBtn,
-                        currentCheckinsPage === totalCheckinsPages - 1 && styles.pagerBtnDisabled,
+                        currentCheckinsPage === totalCheckinsPages - 1 &&
+                          styles.pagerBtnDisabled,
                       ]}
-                      onPress={() => setCheckinsPage((p) => Math.min(totalCheckinsPages - 1, p + 1))}
+                      onPress={() =>
+                        setCheckinsPage((p) =>
+                          Math.min(totalCheckinsPages - 1, p + 1),
+                        )
+                      }
                       disabled={currentCheckinsPage === totalCheckinsPages - 1}
                     >
                       <Text style={styles.pagerBtnText}>Next</Text>
@@ -201,7 +250,7 @@ function StaffDashboardScreen({ navigation }) {
             )}
           </View>
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }
@@ -219,10 +268,22 @@ const styles = StyleSheet.create({
   },
   greeting: { fontSize: 13, color: "#64748b" },
   staffName: { fontSize: 20, fontWeight: "700", color: "#0f172a" },
-  logoutBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: "#e5e7eb" },
+  logoutBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
   logoutText: { fontSize: 12, fontWeight: "600", color: "#374151" },
   body: { paddingHorizontal: 20, paddingBottom: 24, gap: 18 },
-  errorBox: { backgroundColor: "#fff4e5", borderWidth: 1, borderColor: "#ffdca8", borderRadius: 8, padding: 10 },
+  errorBox: {
+    backgroundColor: "#fff4e5",
+    borderWidth: 1,
+    borderColor: "#ffdca8",
+    borderRadius: 8,
+    padding: 10,
+  },
   errorText: { color: "#8a5a00", fontSize: 13 },
   scanCard: {
     flexDirection: "row",
@@ -244,21 +305,65 @@ const styles = StyleSheet.create({
   scanTitle: { color: "#fff", fontWeight: "700", fontSize: 15 },
   scanSubtitle: { color: "#dbeafe", fontSize: 12, marginTop: 2 },
   statsRow: { flexDirection: "row", gap: 12 },
-  statCard: { flex: 1, backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#eef0f3", gap: 6 },
+  statCard: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#eef0f3",
+    gap: 6,
+  },
   statValue: { fontSize: 20, fontWeight: "700", color: "#0f172a" },
   statLabel: { fontSize: 11, color: "#64748b" },
   section: {},
-  sectionLabel: { fontSize: 13, fontWeight: "700", color: "#374151", marginBottom: 8 },
-  centerPanel: { backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#eef0f3" },
-  centerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#374151",
+    marginBottom: 8,
+  },
+  centerPanel: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#eef0f3",
+  },
+  centerTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   centerName: { fontWeight: "700", fontSize: 15, color: "#0f172a" },
-  statusPill: { backgroundColor: "#dcfce7", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  statusPill: {
+    backgroundColor: "#dcfce7",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
   statusPillText: { color: "#15803d", fontSize: 11, fontWeight: "700" },
-  occupancyRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 14 },
+  occupancyRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 14,
+  },
   occupancyLabel: { fontSize: 12, color: "#64748b" },
-  occupancyBar: { height: 6, backgroundColor: "#eef0f3", borderRadius: 3, marginTop: 6, overflow: "hidden" },
+  occupancyBar: {
+    height: 6,
+    backgroundColor: "#eef0f3",
+    borderRadius: 3,
+    marginTop: 6,
+    overflow: "hidden",
+  },
   occupancyFill: { height: 6, backgroundColor: "#2563eb" },
-  emptyPanel: { backgroundColor: "#fff", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#eef0f3" },
+  emptyPanel: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#eef0f3",
+  },
   emptyText: { fontSize: 13, color: "#64748b", textAlign: "center" },
   list: { gap: 8 },
   checkinRow: {
@@ -271,7 +376,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#eef0f3",
   },
-  checkinAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#eaf3ff", alignItems: "center", justifyContent: "center" },
+  checkinAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#eaf3ff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   checkinName: { fontWeight: "600", fontSize: 13, color: "#111827" },
   checkinMeta: { fontSize: 11, color: "#64748b" },
   checkinTime: { fontSize: 11, color: "#9aa3af" },

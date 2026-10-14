@@ -1,6 +1,15 @@
 import { mergeResidentStyles } from "../residentPolish";
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Linking, Alert } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Linking,
+  Alert,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MobileShell from "../components/MobileShell";
 import { BackIcon, PhoneIcon } from "../components/icons";
@@ -12,13 +21,14 @@ function EmergencyContactsScreen({ navigation }) {
 
   useEffect(() => {
     const fetchContacts = async () => {
-      const mobileNumber = (await AsyncStorage.getItem("geoaid_resident_mobile")) || "";
+      const mobileNumber =
+        (await AsyncStorage.getItem("geoaid_resident_mobile")) || "";
 
       try {
         const response = await fetch(
-          `${API_BASE}/api/resident/emergency-contacts/?mobile_number=${encodeURIComponent(mobileNumber)}`
+          `${API_BASE}/api/resident/emergency-contacts/?mobile_number=${encodeURIComponent(mobileNumber)}`,
         );
-        
+
         if (response.ok) {
           const data = await response.json();
           setContacts(data.contacts || []);
@@ -42,10 +52,13 @@ function EmergencyContactsScreen({ navigation }) {
 
   const handleCall = (phone) => {
     if (!phone || phone === "N/A" || phone.startsWith("Not Available")) {
-      Alert.alert("Contact Not Available", "This contact number is not available yet.");
+      Alert.alert(
+        "Contact Not Available",
+        "This contact number is not available yet.",
+      );
       return;
     }
-    
+
     Linking.openURL(`tel:${phone}`).catch(() => {
       Alert.alert("Call Failed", "Unable to make phone call.");
     });
@@ -93,11 +106,11 @@ function EmergencyContactsScreen({ navigation }) {
 
   return (
     <MobileShell>
-      <View style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backBtn} 
-            onPress={() => navigation.goBack()} 
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
             accessibilityLabel="Back"
           >
             <BackIcon />
@@ -109,27 +122,29 @@ function EmergencyContactsScreen({ navigation }) {
           <View style={styles.infoCard}>
             <Text style={styles.infoTitle}>Important Numbers</Text>
             <Text style={styles.infoText}>
-              Save these emergency contact numbers for quick access during disasters. 
-              Tap any contact to call immediately.
+              Save these emergency contact numbers for quick access during
+              disasters. Tap any contact to call immediately.
             </Text>
           </View>
 
           <View style={styles.contactsList}>
             {contacts.length === 0 && (
-              <Text style={styles.infoText}>No emergency contacts have been added by DRRM yet.</Text>
+              <Text style={styles.infoText}>
+                No emergency contacts have been added by DRRM yet.
+              </Text>
             )}
             {contacts.map((contact, index) => (
               <TouchableOpacity
                 key={index}
-                style={[
-                  styles.contactCard,
-                  getContactStyle(contact.type)
-                ]}
+                style={[styles.contactCard, getContactStyle(contact.type)]}
                 onPress={() => handleCall(contact.phone)}
                 accessibilityLabel={`Call ${contact.name}`}
               >
                 <View style={styles.contactIcon}>
-                  <PhoneIcon size={20} color={getContactIconColor(contact.type)} />
+                  <PhoneIcon
+                    size={20}
+                    color={getContactIconColor(contact.type)}
+                  />
                 </View>
                 <View style={styles.contactInfo}>
                   <Text style={styles.contactName}>{contact.name}</Text>
@@ -145,89 +160,116 @@ function EmergencyContactsScreen({ navigation }) {
           <View style={styles.emergencyNote}>
             <Text style={styles.emergencyNoteTitle}>Emergency Services</Text>
             <Text style={styles.emergencyNoteText}>
-              For life-threatening emergencies, dial 911 immediately. 
-              These contacts are for disaster-related assistance and coordination.
+              For life-threatening emergencies, dial 911 immediately. These
+              contacts are for disaster-related assistance and coordination.
             </Text>
           </View>
 
           <View style={styles.updateNote}>
             <Text style={styles.updateNoteText}>
-              These numbers are managed by DRRM. If a number is missing or wrong, please report it to your Barangay or DRRM office.
+              These numbers are managed by DRRM. If a number is missing or
+              wrong, please report it to your Barangay or DRRM office.
             </Text>
           </View>
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </MobileShell>
   );
 }
 
-const styles = StyleSheet.create(mergeResidentStyles({
-  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  screen: { flex: 1 },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  backBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e5e7eb" },
-  title: { fontSize: 17, fontWeight: "700", color: "#0f172a" },
-  body: { paddingHorizontal: 20, paddingBottom: 24, gap: 18 },
-  infoCard: {
-    backgroundColor: "#fff7ed",
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#fed7aa",
-  },
-  infoTitle: { fontSize: 14, fontWeight: "700", color: "#9a3412", marginBottom: 4 },
-  infoText: { fontSize: 13, color: "#7c2d12", lineHeight: 18 },
-  contactsList: { gap: 10 },
-  contactCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-  },
-  contactIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  contactInfo: { flex: 1 },
-  contactName: { fontSize: 15, fontWeight: "700", color: "#111827" },
-  contactPhone: { fontSize: 13, color: "#64748b", marginTop: 2 },
-  callIndicator: {
-    backgroundColor: "#fff",
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  callText: { fontSize: 12, fontWeight: "700", color: "#2563eb" },
-  emergencyNote: {
-    backgroundColor: "#fef2f2",
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#fecaca",
-  },
-  emergencyNoteTitle: { fontSize: 13, fontWeight: "700", color: "#b91c1c", marginBottom: 4 },
-  emergencyNoteText: { fontSize: 12, color: "#991b1b", lineHeight: 16 },
-  updateNote: {
-    backgroundColor: "#f8fafc",
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  updateNoteText: { fontSize: 11, color: "#64748b", textAlign: "center", lineHeight: 15 },
-}, "contacts"));
+const styles = StyleSheet.create(
+  mergeResidentStyles(
+    {
+      loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+      screen: { flex: 1 },
+      header: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        paddingHorizontal: 20,
+        paddingTop: 12,
+        paddingBottom: 8,
+      },
+      backBtn: {
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: "#fff",
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+      },
+      title: { fontSize: 17, fontWeight: "700", color: "#0f172a" },
+      body: { paddingHorizontal: 20, paddingBottom: 24, gap: 18 },
+      infoCard: {
+        backgroundColor: "#fff7ed",
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: "#fed7aa",
+      },
+      infoTitle: {
+        fontSize: 14,
+        fontWeight: "700",
+        color: "#9a3412",
+        marginBottom: 4,
+      },
+      infoText: { fontSize: 13, color: "#7c2d12", lineHeight: 18 },
+      contactsList: { gap: 10 },
+      contactCard: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        borderRadius: 12,
+        padding: 14,
+        borderWidth: 1,
+      },
+      contactIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: "#fff",
+        alignItems: "center",
+        justifyContent: "center",
+      },
+      contactInfo: { flex: 1 },
+      contactName: { fontSize: 15, fontWeight: "700", color: "#111827" },
+      contactPhone: { fontSize: 13, color: "#64748b", marginTop: 2 },
+      callIndicator: {
+        backgroundColor: "#fff",
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+      },
+      callText: { fontSize: 12, fontWeight: "700", color: "#2563eb" },
+      emergencyNote: {
+        backgroundColor: "#fef2f2",
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: "#fecaca",
+      },
+      emergencyNoteTitle: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: "#b91c1c",
+        marginBottom: 4,
+      },
+      emergencyNoteText: { fontSize: 12, color: "#991b1b", lineHeight: 16 },
+      updateNote: {
+        backgroundColor: "#f8fafc",
+        borderRadius: 8,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: "#e2e8f0",
+      },
+      updateNoteText: {
+        fontSize: 11,
+        color: "#64748b",
+        textAlign: "center",
+        lineHeight: 15,
+      },
+    },
+    "contacts",
+  ),
+);
 
 export default EmergencyContactsScreen;
