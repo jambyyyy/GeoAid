@@ -63,7 +63,7 @@ function MembersStep({ headName, initialValue, onContinue, onBack }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
@@ -91,22 +91,27 @@ function MembersStep({ headName, initialValue, onContinue, onBack }) {
             <TextInput
               style={styles.input}
               placeholder="Juan Dela Cruz"
+              placeholderTextColor="#64748B"
+              selectionColor="#2563EB"
+              autoCapitalize="words"
               value={m.fullName}
               onChangeText={(v) => updateMember(m.id, "fullName", v)}
             />
 
             <View style={styles.row}>
-              <View style={styles.rowField}>
+              <View style={[styles.rowField, styles.ageField]}>
                 <Text style={styles.label}>Age</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="number-pad"
+                  placeholderTextColor="#64748B"
+                  selectionColor="#2563EB"
                   placeholder="0"
                   value={String(m.age)}
                   onChangeText={(v) => updateMember(m.id, "age", v)}
                 />
               </View>
-              <View style={styles.rowField}>
+              <View style={[styles.rowField, styles.relationField]}>
                 <Text style={styles.label}>Relation</Text>
                 <SelectField
                   value={m.relation}
@@ -138,7 +143,7 @@ function MembersStep({ headName, initialValue, onContinue, onBack }) {
   );
 }
 
-const styles = StyleSheet.create(mergeResidentStyles({
+const themedStyles = mergeResidentStyles({
   form: { paddingBottom: 32 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -179,6 +184,36 @@ const styles = StyleSheet.create(mergeResidentStyles({
     justifyContent: "center",
   },
   continueBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
-}, "members"));
+}, "members");
+
+// Always apply explicit high-contrast styles last, including when residentPolish
+// injects screen-wide variants or the device is using a dark system theme.
+const styles = StyleSheet.create({
+  ...themedStyles,
+  form: { ...themedStyles.form, paddingTop: 6, paddingBottom: 36 },
+  intro: { ...themedStyles.intro, color: "#475569", fontSize: 14, lineHeight: 21 },
+  card: { ...themedStyles.card, backgroundColor: "#FFFFFF", borderColor: "#E2E8F0", borderRadius: 14 },
+  cardNumber: { ...themedStyles.cardNumber, color: "#0F172A", fontSize: 15 },
+  label: { ...themedStyles.label, color: "#1E293B", fontSize: 14, marginBottom: 8 },
+  input: {
+    ...themedStyles.input,
+    color: "#0F172A",
+    backgroundColor: "#FFFFFF",
+    borderColor: "#CBD5E1",
+    borderWidth: 1,
+    borderRadius: 12,
+    fontSize: 16,
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  ageField: { flex: 0.65, minWidth: 0 },
+  relationField: { flex: 1.35, minWidth: 0 },
+  addBtn: { ...themedStyles.addBtn, backgroundColor: "#EFF6FF", borderColor: "#2563EB", borderRadius: 12, minHeight: 48 },
+  addBtnText: { ...themedStyles.addBtnText, color: "#1D4ED8", fontSize: 14 },
+  backLinkText: { ...themedStyles.backLinkText, color: "#334155" },
+  continueBtn: { ...themedStyles.continueBtn, backgroundColor: "#2563EB", borderRadius: 12, minHeight: 52, paddingHorizontal: 8 },
+  continueBtnText: { ...themedStyles.continueBtnText, color: "#FFFFFF", fontSize: 13, flexShrink: 1, textAlign: "center" },
+  errorText: { ...themedStyles.errorText, color: "#B42318" },
+});
 
 export default MembersStep;

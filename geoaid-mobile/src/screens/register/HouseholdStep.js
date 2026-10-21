@@ -84,7 +84,7 @@ function HouseholdStep({ initialValue, onContinue }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
@@ -112,6 +112,8 @@ function HouseholdStep({ initialValue, onContinue }) {
       <TextInput
         style={styles.input}
         placeholder="e.g. Beside the chapel"
+        placeholderTextColor="#64748B"
+        selectionColor="#2563EB"
         value={landmark}
         onChangeText={setLandmark}
       />
@@ -124,7 +126,7 @@ function HouseholdStep({ initialValue, onContinue }) {
   );
 }
 
-const styles = StyleSheet.create(mergeResidentStyles({
+const themedStyles = mergeResidentStyles({
   form: { paddingBottom: 32 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
@@ -141,6 +143,28 @@ const styles = StyleSheet.create(mergeResidentStyles({
     marginTop: 22,
   },
   continueBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-}, "household"));
+}, "household");
+
+// Always apply explicit high-contrast styles last, including when residentPolish
+// injects screen-wide variants or the device is using a dark system theme.
+const styles = StyleSheet.create({
+  ...themedStyles,
+  form: { ...themedStyles.form, paddingTop: 6, paddingBottom: 36 },
+  label: { ...themedStyles.label, color: "#1E293B", fontSize: 14, fontWeight: "600", marginTop: 18, marginBottom: 8 },
+  input: {
+    ...themedStyles.input,
+    color: "#0F172A",
+    backgroundColor: "#FFFFFF",
+    borderColor: "#CBD5E1",
+    borderWidth: 1,
+    borderRadius: 12,
+    fontSize: 16,
+    minHeight: 52,
+    paddingHorizontal: 14,
+  },
+  continueBtn: { ...themedStyles.continueBtn, backgroundColor: "#2563EB", borderRadius: 12, minHeight: 52 },
+  continueBtnText: { ...themedStyles.continueBtnText, color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  errorText: { ...themedStyles.errorText, color: "#B42318" },
+});
 
 export default HouseholdStep;

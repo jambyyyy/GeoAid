@@ -107,7 +107,7 @@ function RegisterScreen({ navigation }) {
           <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityLabel="Back">
             <BackIcon />
           </TouchableOpacity>
-          <View>
+          <View style={styles.headerText}>
             <Text style={styles.title}>Register Household</Text>
             <Text style={styles.subtitle}>
               Step {stepIndex + 1} of {STEPS.length} — {STEPS[stepIndex]} Setup
@@ -153,7 +153,7 @@ function RegisterScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create(mergeResidentStyles({
+const themedStyles = mergeResidentStyles({
   screen: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingTop: 8 },
   backBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e5e7eb" },
@@ -162,6 +162,20 @@ const styles = StyleSheet.create(mergeResidentStyles({
   body: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
   errorBox: { backgroundColor: "#fdecec", borderWidth: 1, borderColor: "#f5b5b5", borderRadius: 8, padding: 10, marginBottom: 12 },
   errorText: { color: "#b42318", fontSize: 13 },
-}, "register"));
+}, "register");
+
+// Always apply explicit high-contrast styles last, including when residentPolish
+// injects screen-wide variants or the device is using a dark system theme.
+const styles = StyleSheet.create({
+  ...themedStyles,
+  screen: { ...themedStyles.screen, backgroundColor: "#F8FAFC" },
+  header: { ...themedStyles.header, paddingTop: 10, paddingBottom: 6 },
+  headerText: { flex: 1, minWidth: 0 },
+  backBtn: { ...themedStyles.backBtn, backgroundColor: "#FFFFFF", borderColor: "#E2E8F0", borderRadius: 12 },
+  title: { ...themedStyles.title, color: "#0F172A", fontSize: 20, fontWeight: "700" },
+  subtitle: { ...themedStyles.subtitle, color: "#475569", fontSize: 13, marginTop: 4 },
+  body: { ...themedStyles.body, paddingTop: 10 },
+  errorText: { ...themedStyles.errorText, color: "#B42318" },
+});
 
 export default RegisterScreen;
